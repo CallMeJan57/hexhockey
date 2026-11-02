@@ -23,7 +23,8 @@ Lokal starten: `python3 tools/serve.py` (Port 8010, ohne Browser-Cache; Konfigur
 - Verliert ein Mitspieler im Spiel die Verbindung, übernimmt die KI seinen Schläger
 
 ## Handy
-- Finger steuert den Schläger direkt (Schläger sitzt `TOUCH_OFFSET` über dem Finger, damit man ihn sieht); auf dem Mitspieler-Handy wird der eigene Schläger sofort lokal angezeigt
+- Auf Touch-Geräten liegt im Spiel unten ein Touch-Feld (`#pad`, Zeichnen und Eingabe in `main.js`): zeigt die eigene Zone als Karte (oben = vorne, unten = eigenes Tor), damit der Finger nicht den Puck verdeckt. Zum Testen am Rechner: `?pad` an die Adresse hängen
+- Direkt aufs Feld tippen geht weiterhin (Schläger sitzt `TOUCH_OFFSET` über dem Finger); auf dem Mitspieler-Handy wird der eigene Schläger sofort lokal angezeigt
 - Als Web-App installierbar (`manifest.webmanifest`); später ggf. mit Capacitor als App verpacken
 - Zum Spielen mit echten Handys muss die Seite über HTTPS erreichbar sein (z. B. GitHub Pages) – der QR-Code zeigt auf die aktuelle Adresse
 

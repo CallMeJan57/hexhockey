@@ -1,7 +1,7 @@
 // Ablauf: Startseite → Raum (Lobby) → Spiel → Ende. Das Host-Handy rechnet die Physik und schickt
 // Schnappschüsse; jedes Handy zeigt das Feld so gedreht, dass das eigene Tor unten liegt.
 import { Renderer } from './render.js';
-import { buildArena, evenLayout } from './arena.js';
+import { alongEdge, buildArena, depthFrom, evenLayout, fromEdge, zonePolygon } from './arena.js';
 import { Simulation, clampToZone, homePosition, layoutFromSnapshot } from './physics.js';
 import { aiTarget } from './ai.js';
 import { Host, Client, normalizeCode } from './net.js';
@@ -40,6 +40,7 @@ const finger = { target: null, pointerId: null, dirty: false };
 function show(screen) {
   for (const id of ['home', 'lobby', 'end']) $(`#${id}`).hidden = id !== screen;
   $('#gameUi').hidden = screen !== null;
+  if (screen !== null) setPad(false);
   document.body.classList.toggle('playing', screen === null);
 }
 
@@ -329,6 +330,7 @@ function enterGame(v, index) {
   finger.pointerId = null;
   renderer.setup(view, myIndex);
   show(null);
+  setPad(IS_TOUCH);
   requestWakeLock();
   countdown.forEach(clearTimeout);
   const me = view.players[myIndex];
@@ -497,6 +499,116 @@ for (const type of ['pointerup', 'pointercancel']) {
 addEventListener('pointerdown', unlockAudio, { capture: true });
 addEventListener('keydown', unlockAudio, { capture: true });
 
+// ---------- Touch-Feld ----------
+// Auf Handys liegt unter dem Spielfeld ein eigenes Feld zum Steuern. Es zeigt die eigene Zone als Karte:
+// oben auf dem Feld = vorne in der Zone, unten = vor dem eigenen Tor.
+
+const IS_TOUCH = matchMedia('(pointer: coarse)').matches || new URLSearchParams(location.search).has('pad');
+const pad = { on: false, used: false, map: null, pointerId: null, canvas: $('#padCanvas') };
+
+function setPad(on) {
+  if (pad.on === on) return;
+  pad.on = on;
+  pad.map = null;
+  $('#pad').hidden = !on;
+  document.body.classList.toggle('with-pad', on);
+}
+
+function drawPad(me, ownMallet) {
+  const c = pad.canvas, dpr = Math.min(devicePixelRatio, 2);
+  const w = c.clientWidth, h = c.clientHeight;
+  if (!w || !h) return;
+  if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) {
+    c.width = Math.round(w * dpr);
+    c.height = Math.round(h * dpr);
+  }
+  const ctx = c.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  const e = me.edge;
+  const local = p => ({ u: alongEdge(e, p.x, p.y), d: depthFrom(e, p.x, p.y) });
+  const zone = zonePolygon(view.arena, e).map(local);
+  if (zone.length < 3) return;
+  const umin = Math.min(...zone.map(p => p.u)), umax = Math.max(...zone.map(p => p.u));
+  const dmax = Math.max(...zone.map(p => p.d));
+  const margin = 12;
+  const scale = Math.min((w - 2 * margin) / (umax - umin), (h - 2 * margin) / dmax);
+  const ox = (w - (umax - umin) * scale) / 2, oy = (h - dmax * scale) / 2;
+  pad.map = { edge: e, umax, dmax, scale, ox, oy };
+  // u wächst auf dem Bildschirm nach links, deshalb gespiegelt
+  const px = (u, d) => [ox + (umax - u) * scale, oy + (dmax - d) * scale];
+  const color = PLAYER_COLORS[me.colorIndex].css;
+
+  ctx.beginPath();
+  zone.forEach((p, i) => ctx[i ? 'lineTo' : 'moveTo'](...px(p.u, p.d)));
+  ctx.closePath();
+  ctx.globalAlpha = 0.14;
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.globalAlpha = 0.6;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Eigenes Tor unten
+  ctx.globalAlpha = 1;
+  ctx.lineWidth = 5;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(...px(e.half, 0));
+  ctx.lineTo(...px(-e.half, 0));
+  ctx.stroke();
+
+  for (const pk of view.pucks) {
+    if (!pk.active) continue;
+    const q = local(pk);
+    if (q.d > dmax + 1 || q.u < umin - 1 || q.u > umax + 1) continue;
+    ctx.beginPath();
+    ctx.arc(...px(q.u, q.d), TABLE.puckRadius * scale, 0, Math.PI * 2);
+    ctx.fillStyle = '#e8f4ff';
+    ctx.fill();
+  }
+  const m = local(ownMallet);
+  ctx.beginPath();
+  ctx.arc(...px(m.u, m.d), TABLE.malletRadius * scale, 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 14;
+  ctx.fill();
+  ctx.shadowBlur = 0;
+
+  if (!pad.used) {
+    ctx.fillStyle = 'rgba(233,238,247,0.55)';
+    ctx.font = '600 15px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Hier wischen – dein Schläger folgt', w / 2, h - 14);
+  }
+}
+
+function padTarget(e) {
+  const m = pad.map;
+  if (!m) return;
+  const rect = pad.canvas.getBoundingClientRect();
+  const u = m.umax - (e.clientX - rect.left - m.ox) / m.scale;
+  const d = m.dmax - (e.clientY - rect.top - m.oy) / m.scale;
+  finger.target = fromEdge(m.edge, u, d);
+  finger.dirty = true;
+}
+pad.canvas.addEventListener('pointerdown', e => {
+  if (mode !== 'play') return;
+  pad.pointerId = e.pointerId;
+  pad.used = true;
+  pad.canvas.setPointerCapture?.(e.pointerId);
+  padTarget(e);
+});
+pad.canvas.addEventListener('pointermove', e => {
+  if (mode === 'play' && e.pointerId === pad.pointerId) padTarget(e);
+});
+for (const type of ['pointerup', 'pointercancel']) {
+  pad.canvas.addEventListener(type, e => { if (e.pointerId === pad.pointerId) pad.pointerId = null; });
+}
+
 // ---------- Display wach halten ----------
 
 let wakeLock = null;
@@ -546,6 +658,10 @@ function frame(now) {
     overrides.ownMallet = clampToZone(view.arena, me.edge, { ...finger.target });
   }
   if (view && view !== sim) keepPucksOutside(overrides);
+  if (pad.on) {
+    if (me?.edge && mode === 'play') drawPad(me, overrides.ownMallet ?? me.mallet);
+    else if (!me?.alive) setPad(false);   // ausgeschieden: ganzer Bildschirm fürs Zuschauen
+  }
   if (view) renderer.update(view, dt, overrides);
   requestAnimationFrame(frame);
 }

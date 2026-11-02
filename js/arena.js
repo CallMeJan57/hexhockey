@@ -134,6 +134,29 @@ export function fromEdge(edge, u, depth) {
   };
 }
 
+// Fläche, in der sich der Schläger eines Tors bewegen darf (Tortenstück bis zoneDepth)
+export function zonePolygon(arena, edge) {
+  let poly = clipHalfPlane(arena.verts, edge.n, edge.c - edge.zoneDepth);
+  for (const m of edge.planes) poly = clipHalfPlane(poly, { x: -m.x, y: -m.y }, 0);
+  return poly;
+}
+
+// Teil des Vielecks mit p·n >= c (Sutherland-Hodgman für eine Halbebene)
+function clipHalfPlane(poly, n, c) {
+  const out = [], dot = p => p.x * n.x + p.y * n.y;
+  const cut = (a, b) => {
+    const t = (c - dot(a)) / (dot(b) - dot(a));
+    return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+  };
+  poly.forEach((cur, i) => {
+    const prev = poly[(i + poly.length - 1) % poly.length];
+    const cIn = dot(cur) >= c, pIn = dot(prev) >= c;
+    if (cIn) { if (!pIn) out.push(cut(prev, cur)); out.push(cur); }
+    else if (pIn) out.push(cut(prev, cur));
+  });
+  return out;
+}
+
 export function lerpAngle(a, b, s) {
   let d = (b - a) % TAU;
   if (d > Math.PI) d -= TAU;

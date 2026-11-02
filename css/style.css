@@ -33,9 +33,10 @@ body.playing { user-select: none; -webkit-user-select: none; -webkit-touch-callo
 
 #scene {
   position: fixed;
-  inset: 0;
+  top: 0;
+  left: 0;
   width: 100%;
-  height: 100%;
+  height: calc(100% - var(--pad-total, 0px));
   display: block;
   touch-action: none;
 }
@@ -176,6 +177,30 @@ button.icon { padding: 4px 10px; font-size: 20px; line-height: 1; background: tr
 /* ---------- Im Spiel ---------- */
 
 #labels { position: fixed; inset: 0; pointer-events: none; }
+
+/* Touch-Feld unter dem Spielfeld: der Finger verdeckt den Puck nicht */
+body.with-pad { --pad-total: calc(min(30vh, 260px) + var(--safe-bottom)); }
+#pad {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: var(--pad-total);
+  padding: 8px 12px calc(10px + var(--safe-bottom));
+  background: linear-gradient(#0b0f18, #07090f);
+  border-top: 1px solid var(--border);
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+#padCanvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  touch-action: none;
+}
 .label {
   position: absolute;
   left: 0;

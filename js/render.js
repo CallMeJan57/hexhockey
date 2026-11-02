@@ -3,6 +3,7 @@
 // Der Tisch wird neu gebaut, sobald sich view.arena ändert (z. B. wenn das Feld nach einem Ausscheiden schrumpft).
 import * as THREE from 'three';
 import { PLAYER_COLORS, TABLE } from './config.js';
+import { zonePolygon } from './arena.js';
 
 const CAMERA_TILT = 0.45;   // 0 = genau von oben
 const GOAL_DEPTH = 1.5;     // Tiefe des Torkastens hinter der Torlinie
@@ -59,7 +60,8 @@ export class Renderer {
     this.fitRadius = 14;
     this.fitTarget = 14;
 
-    addEventListener('resize', () => this.resize());
+    // Die Zeichenfläche ist nicht immer bildschirmfüllend (unten kann das Touch-Feld liegen)
+    new ResizeObserver(() => this.resize()).observe(canvas);
     this.resize();
   }
 
@@ -127,8 +129,7 @@ export class Renderer {
     for (const e of arena.edges) {
       if (!e.goal) continue;
       const mats = this.playerMats[e.owner];
-      let poly = clipHalfPlane(arena.verts, e.n, e.c - e.zoneDepth);
-      for (const m of e.planes) poly = clipHalfPlane(poly, { x: -m.x, y: -m.y }, 0);
+      const poly = zonePolygon(arena, e);
       if (poly.length < 3) continue;
       const zone = new THREE.Mesh(
         new THREE.ShapeGeometry(new THREE.Shape(poly.map(v => new THREE.Vector2(v.x, -v.y)))).rotateX(-Math.PI / 2),
@@ -201,8 +202,8 @@ export class Renderer {
   }
 
   resize() {
-    const w = innerWidth, h = innerHeight;
-    this.renderer.setSize(w, h);
+    const w = this.canvas.clientWidth || innerWidth, h = this.canvas.clientHeight || innerHeight;
+    this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.placeCamera();
   }
@@ -220,7 +221,8 @@ export class Renderer {
 
   // Bildschirmpunkt → Punkt auf dem Tisch (Spielfeld-Koordinaten)
   pickTable(clientX, clientY) {
-    const ndc = new THREE.Vector2((clientX / innerWidth) * 2 - 1, -(clientY / innerHeight) * 2 + 1);
+    const rect = this.canvas.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
     this.raycaster.setFromCamera(ndc, this.camera);
     const hit = new THREE.Vector3();
     if (!this.raycaster.ray.intersectPlane(this.tablePlane, hit)) return null;
@@ -328,8 +330,9 @@ export class Renderer {
       v.set(e.mid.x + e.n.x * off, 0, e.mid.y + e.n.y * off).project(this.camera);
       // Im Hochformat liegen seitliche Schilder sonst halb außerhalb des Bildschirms
       const half = lab.el.offsetWidth / 2 + 6, halfH = lab.el.offsetHeight / 2 + 6;
-      const x = Math.min(innerWidth - half, Math.max(half, (v.x + 1) / 2 * innerWidth));
-      const y = Math.min(innerHeight - halfH, Math.max(halfH, (1 - v.y) / 2 * innerHeight));
+      const W = this.canvas.clientWidth, Hh = this.canvas.clientHeight;
+      const x = Math.min(W - half, Math.max(half, (v.x + 1) / 2 * W));
+      const y = Math.min(Hh - halfH, Math.max(halfH, (1 - v.y) / 2 * Hh));
       lab.el.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%)`;
       const key = `${p.name}|${p.lives}`;
       if (key === lab.key) return;
@@ -444,22 +447,6 @@ function netTexture() {
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
-}
-
-// Teil des Vielecks mit p·n >= c (Sutherland-Hodgman für eine Halbebene)
-function clipHalfPlane(poly, n, c) {
-  const out = [], dot = p => p.x * n.x + p.y * n.y;
-  const cut = (a, b) => {
-    const t = (c - dot(a)) / (dot(b) - dot(a));
-    return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
-  };
-  poly.forEach((cur, i) => {
-    const prev = poly[(i + poly.length - 1) % poly.length];
-    const cIn = dot(cur) >= c, pIn = dot(prev) >= c;
-    if (cIn) { if (!pIn) out.push(cut(prev, cur)); out.push(cur); }
-    else if (pIn) out.push(cut(prev, cur));
-  });
-  return out;
 }
 
 // Gibt Geometrien frei; Materialien nur mit withMaterials (die Tisch-Materialien werden wiederverwendet)
