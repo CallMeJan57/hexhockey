@@ -1,12 +1,12 @@
 // Ablauf: Startseite → Raum (Lobby) → Spiel → Ende. Das Host-Handy rechnet die Physik und schickt
 // Schnappschüsse; jedes Handy zeigt das Feld so gedreht, dass das eigene Tor unten liegt.
 import { Renderer } from './render.js';
-import { createArena } from './arena.js';
-import { Simulation, clampToZone, homePosition } from './physics.js';
+import { buildArena, evenLayout } from './arena.js';
+import { Simulation, clampToZone, homePosition, layoutFromSnapshot } from './physics.js';
 import { aiTarget } from './ai.js';
 import { Host, Client, normalizeCode } from './net.js';
 import { sfx, unlockAudio } from './audio.js';
-import { AI_LEVELS, MAX_PLAYERS, NET, PHYSICS, PLAYER_COLORS, TOUCH_OFFSET } from './config.js';
+import { AI_LEVELS, MAX_PLAYERS, NET, PHYSICS, PLAYER_COLORS, TABLE, TOUCH_OFFSET } from './config.js';
 
 const $ = sel => document.querySelector(sel);
 const renderer = new Renderer($('#scene'), $('#labels'));
@@ -57,7 +57,7 @@ function banner(text, color = '#fff', ms = 1600) {
 
 function startDemo() {
   const players = PLAYER_COLORS.map((c, i) => ({ name: c.name, colorIndex: i, bot: true, level: 2 }));
-  sim = new Simulation(createArena(players.length), players, { lives: Infinity, pucks: 2, startDelay: 0.3 });
+  sim = new Simulation(players, { lives: Infinity, pucks: 2, startDelay: 0.3 });
   view = sim;
   myIndex = -1;
   renderer.setup(view, -1, { labels: false });
@@ -177,7 +177,7 @@ $('#leaveLobby').addEventListener('click', () => goHome());
 function startGame() {
   if (role !== 'host' || lobby.players.length < 2) return;
   const players = lobby.players.map(p => ({ name: p.name, colorIndex: p.colorIndex, bot: p.bot, level: p.level ?? 2 }));
-  sim = new Simulation(createArena(players.length), players, lobby.settings, hostEvents);
+  sim = new Simulation(players, lobby.settings, hostEvents);
   idToIndex = new Map(lobby.players.map((p, i) => [p.id, i]));
   remoteTargets.clear();
   evQueue = [];
@@ -245,16 +245,16 @@ function onHostMessage(msg) {
 }
 
 function makeReplica(msg) {
-  const arena = createArena(msg.players.length);
+  const arena = buildArena(evenLayout(msg.players.map((_, i) => i)));
   const players = msg.players.map((p, i) => {
-    const edge = arena.edges.find(e => e.owner === i);
+    const edge = arena.goalEdges.get(i);
     const h = homePosition(edge);
     return { ...p, index: i, edge, lives: msg.settings.lives, alive: true, mallet: { ...h }, net: { ...h } };
   });
   const pucks = Array.from({ length: msg.settings.pucks }, () => ({
     active: false, x: 0, y: 0, vx: 0, vy: 0, timer: PHYSICS.startDelay, lastTouch: -1, net: null, netTime: 0,
   }));
-  return { arena, players, pucks };
+  return { arena, layoutKey: '', players, pucks };
 }
 
 function applySnapshot(s) {
@@ -263,8 +263,14 @@ function applySnapshot(s) {
     p.net = { x: s.m[i][0], y: s.m[i][1] };
     p.lives = s.l[i];
     p.alive = p.lives > 0;
-    p.edge.goalOpen = p.alive;
   });
+  // Feldform (ändert sich, wenn jemand ausscheidet)
+  const key = JSON.stringify(s.g);
+  if (key !== view.layoutKey) {
+    view.layoutKey = key;
+    view.arena = buildArena(layoutFromSnapshot(s.g));
+  }
+  for (const p of view.players) p.edge = p.alive ? view.arena.goalEdges.get(p.index) ?? null : null;
   view.pucks.forEach((pk, i) => {
     const [active, x, y, vx, vy, timer, lastTouch] = s.p[i];
     const jump = !pk.active || !pk.net || Math.hypot(x - pk.x, y - pk.y) > 3;
@@ -291,6 +297,23 @@ function updateReplica(dt) {
     const age = Math.min(now - pk.netTime, 120) / 1000;   // kurz in die Zukunft rechnen
     pk.x += (pk.net.x + pk.net.vx * age - pk.x) * kp;
     pk.y += (pk.net.y + pk.net.vy * age - pk.y) * kp;
+  }
+}
+
+// Auf Mitspieler-Handys kommen Puck und Schläger getrennt geglättet an – damit der Puck nie im Schläger
+// steckt, wird er für die Anzeige herausgeschoben (die echte Physik läuft auf dem Host)
+function keepPucksOutside(overrides) {
+  const minD = TABLE.puckRadius + TABLE.malletRadius;
+  for (const pk of view.pucks) {
+    if (!pk.active) continue;
+    view.players.forEach((p, i) => {
+      if (!p.alive) return;
+      const m = i === overrides.ownIndex && overrides.ownMallet ? overrides.ownMallet : p.mallet;
+      const dx = pk.x - m.x, dy = pk.y - m.y, d = Math.hypot(dx, dy);
+      if (d >= minD || d < 1e-6) return;
+      pk.x = m.x + dx / d * minD;
+      pk.y = m.y + dy / d * minD;
+    });
   }
 }
 
@@ -327,7 +350,7 @@ function handleEvent(ev) {
       const [, victim, scorer, x, y] = ev;
       sfx.goal();
       renderer.goalEffect(victim, x, y);
-      if (victim === myIndex) navigator.vibrate?.(250);
+      if (victim === myIndex && navigator.userActivation?.hasBeenActive) navigator.vibrate?.(250);
       const text = victim === myIndex ? 'Gegentor!' : scorer >= 0 ? `${name(scorer)} trifft ${name(victim)}` : `Tor gegen ${name(victim)}`;
       banner(text, color(victim));
       break;
@@ -518,10 +541,11 @@ function frame(now) {
   // Eigener Schläger auf Mitspieler-Handys sofort am Finger (die Physik kommt kurz danach vom Host)
   const overrides = {};
   const me = view?.players[myIndex];
-  if (view !== sim && me?.alive && finger.target) {
+  if (view !== sim && me?.edge && finger.target) {
     overrides.ownIndex = myIndex;
     overrides.ownMallet = clampToZone(view.arena, me.edge, { ...finger.target });
   }
+  if (view && view !== sim) keepPucksOutside(overrides);
   if (view) renderer.update(view, dt, overrides);
   requestAnimationFrame(frame);
 }

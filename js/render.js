@@ -1,10 +1,12 @@
 // 3D-Darstellung mit Three.js. Zeichnet einen „View“ – die Simulation auf dem Host oder deren Abbild auf
 // den anderen Handys: { arena, players: [{ name, colorIndex, alive, lives, mallet, edge }], pucks: [...] }.
+// Der Tisch wird neu gebaut, sobald sich view.arena ändert (z. B. wenn das Feld nach einem Ausscheiden schrumpft).
 import * as THREE from 'three';
 import { PLAYER_COLORS, TABLE } from './config.js';
 
-const UP = new THREE.Vector3(0, 1, 0);
 const CAMERA_TILT = 0.32;   // 0 = genau von oben
+const GOAL_DEPTH = 1.5;     // Tiefe des Torkastens hinter der Torlinie
+const SINK = 0.3;           // so tief liegt der Boden des Torkastens
 
 export class Renderer {
   constructor(canvas, labelsEl) {
@@ -29,143 +31,150 @@ export class Renderer {
     sun.shadow.bias = -0.0005;
     this.scene.add(sun);
 
+    this.mats = {
+      body: new THREE.MeshStandardMaterial({ color: 0x0c111b, roughness: 0.8 }),
+      surface: new THREE.MeshStandardMaterial({ map: holeTexture(), roughness: 0.32, metalness: 0.08 }),
+      rail: new THREE.MeshStandardMaterial({ color: 0x1d2536, metalness: 0.55, roughness: 0.3 }),
+      line: new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.22 }),
+    };
+    this.netTexture = netTexture();
+
+    // Mittelkreis bleibt immer gleich
+    const ring = new THREE.Mesh(new THREE.RingGeometry(2.0, 2.09, 72).rotateX(-Math.PI / 2), this.mats.line);
+    const dot = new THREE.Mesh(new THREE.CircleGeometry(0.22, 24).rotateX(-Math.PI / 2), this.mats.line);
+    ring.position.y = dot.position.y = 0.012;
+    this.scene.add(ring, dot);
+
     this.raycaster = new THREE.Raycaster();
-    this.tablePlane = new THREE.Plane(UP, 0);
-    this.group = null;
+    this.tablePlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    this.table = null;
+    this.builtArena = null;
+    this.dynamic = new THREE.Group();   // Schläger + Pucks
+    this.scene.add(this.dynamic);
+    this.playerMats = [];
     this.particles = [];
+    this.flash = [];
     this.shake = 0;
     this.viewDir = new THREE.Vector2(0, 1);
     this.fitRadius = 14;
+    this.fitTarget = 14;
 
     addEventListener('resize', () => this.resize());
     this.resize();
   }
 
-  // Baut das Spielfeld für einen View. myIndex: eigener Spieler (sein Tor liegt unten), -1 = Zuschauer
+  // Neues Spiel. myIndex: eigener Spieler (sein Tor liegt unten), -1 = Zuschauer
   setup(view, myIndex = -1, { labels = true } = {}) {
-    if (this.group) { this.scene.remove(this.group); disposeTree(this.group); }
-    for (const p of this.particles) { this.scene.remove(p.points); disposeTree(p.points); }
+    for (const p of this.particles) { this.scene.remove(p.points); disposeTree(p.points, true); }
     this.particles = [];
-    const g = this.group = new THREE.Group();
-    this.scene.add(g);
-    const arena = view.arena;
-    const verts = arena.edges.map(e => e.a);
+    disposeTree(this.dynamic, true);
+    this.dynamic.clear();
+    for (const set of this.playerMats) for (const m of Object.values(set)) m.dispose();
 
-    // Tischkörper + Oberfläche mit Luftlöchern
-    const shape = new THREE.Shape(verts.map(v => new THREE.Vector2(v.x, -v.y)));
-    const body = new THREE.Mesh(
-      new THREE.ExtrudeGeometry(shape, { depth: 1.2, bevelEnabled: false }).rotateX(-Math.PI / 2),
-      new THREE.MeshStandardMaterial({ color: 0x0c111b, roughness: 0.8 }),
-    );
-    body.position.y = -1.2;
-    g.add(body);
-    const surface = new THREE.Mesh(
-      new THREE.ShapeGeometry(shape).rotateX(-Math.PI / 2),
-      new THREE.MeshStandardMaterial({ map: holeTexture(), roughness: 0.32, metalness: 0.08 }),
-    );
-    surface.position.y = 0.001;
-    surface.receiveShadow = true;
-    g.add(surface);
-
-    const lineMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.22 });
-    const ring = new THREE.Mesh(new THREE.RingGeometry(2.0, 2.09, 72).rotateX(-Math.PI / 2), lineMat);
-    ring.position.y = 0.012;
-    g.add(ring);
-    const dot = new THREE.Mesh(new THREE.CircleGeometry(0.22, 24).rotateX(-Math.PI / 2), lineMat);
-    dot.position.y = 0.012;
-    g.add(dot);
-
-    const T = TABLE.railThickness, H = TABLE.railHeight;
-    const railMat = new THREE.MeshStandardMaterial({ color: 0x1d2536, metalness: 0.55, roughness: 0.3 });
-    const gateMat = new THREE.MeshStandardMaterial({ color: 0x3a4152, metalness: 0.3, roughness: 0.5 });
-
-    this.edgeViews = arena.edges.map(e => {
-      const ev = { edge: e, flash: 0, gate: null, gateY: 0 };
-      const color = e.owner >= 0 ? PLAYER_COLORS[view.players[e.owner].colorIndex] : null;
-
-      if (color) {
-        // Spielzone leicht eingefärbt, mit Grenzlinie
-        const c = arena.apothem - arena.zoneDepth;
-        const zonePoly = clipHalfPlane(verts, e.n, c);
-        ev.zoneMat = new THREE.MeshBasicMaterial({ color: color.hex, transparent: true, opacity: 0.1, depthWrite: false });
-        const zone = new THREE.Mesh(
-          new THREE.ShapeGeometry(new THREE.Shape(zonePoly.map(v => new THREE.Vector2(v.x, -v.y)))).rotateX(-Math.PI / 2),
-          ev.zoneMat,
-        );
-        zone.position.y = 0.006;
-        g.add(zone);
-        const onLine = zonePoly.filter(v => Math.abs(v.x * e.n.x + v.y * e.n.y - c) < 1e-6);
-        if (onLine.length === 2) {
-          ev.lineMat = new THREE.MeshBasicMaterial({ color: color.hex, transparent: true, opacity: 0.45 });
-          g.add(strip(onLine[0], onLine[1], 0.06, ev.lineMat, 0.014));
-        }
-
-        const gh = e.goalHalf;
-        const g1 = { x: e.mid.x - e.t.x * gh, y: e.mid.y - e.t.y * gh };
-        const g2 = { x: e.mid.x + e.t.x * gh, y: e.mid.y + e.t.y * gh };
-        g.add(rail(e.a, g1, e.n, railMat));
-        g.add(rail(g2, e.b, e.n, railMat));
-
-        ev.goalMat = new THREE.MeshStandardMaterial({ color: color.hex, emissive: color.hex, emissiveIntensity: 0.7 });
-        g.add(strip(g1, g2, 0.14, ev.goalMat, 0.015));
-        for (const gp of [g1, g2]) {
-          const post = new THREE.Mesh(new THREE.CylinderGeometry(TABLE.postRadius, TABLE.postRadius, H + 0.15, 16), ev.goalMat);
-          post.position.set(gp.x, (H + 0.15) / 2, gp.y);
-          post.castShadow = true;
-          g.add(post);
-        }
-        // Torkasten hinter der Lücke
-        const depth = 1.8;
-        const pocket = new THREE.Mesh(
-          new THREE.BoxGeometry(gh * 2, 0.05, depth),
-          new THREE.MeshStandardMaterial({ color: color.hex, emissive: color.hex, emissiveIntensity: 0.35 }),
-        );
-        pocket.position.set(e.mid.x + e.n.x * depth / 2, -0.35, e.mid.y + e.n.y * depth / 2);
-        pocket.rotation.y = Math.atan2(-e.t.y, e.t.x);
-        g.add(pocket);
-        const back = rail(
-          { x: g1.x + e.n.x * depth, y: g1.y + e.n.y * depth },
-          { x: g2.x + e.n.x * depth, y: g2.y + e.n.y * depth }, e.n, railMat);
-        back.position.y -= 0.3;
-        g.add(back);
-
-        // Wand, die das Tor schließt, wenn der Spieler raus ist
-        ev.gate = rail(g1, g2, e.n, gateMat);
-        ev.gate.visible = false;
-        g.add(ev.gate);
-      } else {
-        g.add(rail(e.a, e.b, e.n, railMat));
-      }
-      return ev;
-    });
-
-    for (const v of verts) {
-      const len = Math.hypot(v.x, v.y);
-      const post = new THREE.Mesh(new THREE.CylinderGeometry(T * 0.8, T * 0.8, H + 0.1, 20), railMat);
-      post.position.set(v.x + v.x / len * T * 0.5, (H + 0.1) / 2, v.y + v.y / len * T * 0.5);
-      post.castShadow = true;
-      g.add(post);
-    }
-
+    this.myIndex = myIndex;
+    this.playerMats = view.players.map(p => playerMaterials(PLAYER_COLORS[p.colorIndex].hex, this.netTexture));
+    this.flash = view.players.map(() => 0);
     this.mallets = view.players.map(p => {
       const m = mallet(PLAYER_COLORS[p.colorIndex].hex);
-      g.add(m);
+      this.dynamic.add(m);
       return m;
     });
     this.puckMeshes = view.pucks.map(() => {
       const pm = puck();
-      g.add(pm);
+      this.dynamic.add(pm);
       return pm;
     });
-
     this.setupLabels(view, labels);
+    this.buildTable(view);
 
-    // Kamera hinter das eigene Tor drehen
     const me = view.players[myIndex];
-    const n = me ? me.edge.n : { x: 0, y: 1 };
+    const n = me?.edge ? me.edge.n : { x: 0, y: 1 };
     this.viewDir.set(n.x, n.y);
-    this.fitRadius = arena.circumradius + 1.6;
+    this.fitRadius = this.fitTarget;
     this.resize();
+  }
+
+  buildTable(view) {
+    if (this.table) { this.scene.remove(this.table); disposeTree(this.table, false); }
+    const arena = this.builtArena = view.arena;
+    const g = this.table = new THREE.Group();
+    this.scene.add(g);
+    const shape = new THREE.Shape(arena.verts.map(v => new THREE.Vector2(v.x, -v.y)));
+
+    const body = new THREE.Mesh(new THREE.ExtrudeGeometry(shape, { depth: 1.2, bevelEnabled: false }).rotateX(-Math.PI / 2), this.mats.body);
+    body.position.y = -1.2;
+    const surface = new THREE.Mesh(new THREE.ShapeGeometry(shape).rotateX(-Math.PI / 2), this.mats.surface);
+    surface.position.y = 0.001;
+    surface.receiveShadow = true;
+    g.add(body, surface);
+
+    for (const e of arena.edges) {
+      if (e.goal) g.add(this.goal(e, this.playerMats[e.owner]));
+      else g.add(rail(e.a, e.b, e.n, this.mats.rail));
+    }
+    // Stöße zwischen zwei Banden abdecken (Torpfosten haben eigene Säulen)
+    const T = TABLE.railThickness, H = TABLE.railHeight;
+    for (const v of arena.verts) {
+      if (arena.posts.includes(v)) continue;
+      const len = Math.hypot(v.x, v.y) || 1;
+      const joint = new THREE.Mesh(new THREE.CylinderGeometry(T * 0.75, T * 0.75, H, 20), this.mats.rail);
+      joint.position.set(v.x + v.x / len * T * 0.45, H / 2, v.y + v.y / len * T * 0.45);
+      joint.castShadow = true;
+      g.add(joint);
+    }
+
+    // Spielerzonen (Tortenstücke) mit Rand
+    for (const e of arena.edges) {
+      if (!e.goal) continue;
+      const mats = this.playerMats[e.owner];
+      let poly = clipHalfPlane(arena.verts, e.n, e.c - e.zoneDepth);
+      for (const m of e.planes) poly = clipHalfPlane(poly, { x: -m.x, y: -m.y }, 0);
+      if (poly.length < 3) continue;
+      const zone = new THREE.Mesh(
+        new THREE.ShapeGeometry(new THREE.Shape(poly.map(v => new THREE.Vector2(v.x, -v.y)))).rotateX(-Math.PI / 2),
+        mats.zone,
+      );
+      zone.position.y = 0.006;
+      g.add(zone);
+      poly.forEach((p, i) => {
+        const q = poly[(i + 1) % poly.length];
+        const onRail = arena.edges.some(k => Math.abs(k.c - (p.x * k.n.x + p.y * k.n.y)) < 1e-5 && Math.abs(k.c - (q.x * k.n.x + q.y * k.n.y)) < 1e-5);
+        if (!onRail) g.add(strip(p, q, 0.06, mats.zoneLine, 0.014));
+      });
+    }
+
+    this.fitTarget = arena.extent + GOAL_DEPTH + 1.2;
+  }
+
+  // Torkasten: leuchtende Pfosten, versenkter Boden, Seitenwände mit Leuchtkante, Netz an der Rückwand
+  goal(e, mats) {
+    const T = TABLE.railThickness, H = TABLE.railHeight, w = e.half * 2;
+    const g = new THREE.Group();
+    g.position.set(e.mid.x, 0, e.mid.y);
+    g.rotation.y = Math.atan2(-e.t.y, e.t.x);   // lokal: x entlang der Torlinie, -z nach außen
+    const add = (geo, mat, x, y, z, shadow = true) => {
+      const m = new THREE.Mesh(geo, mat);
+      m.position.set(x, y, z);
+      m.castShadow = shadow;
+      g.add(m);
+      return m;
+    };
+    const wallH = H + SINK, wallY = (H - SINK) / 2, sideX = e.half + T * 0.35;
+
+    add(new THREE.BoxGeometry(w + T, 0.05, GOAL_DEPTH), mats.floor, 0, -SINK, -GOAL_DEPTH / 2, false);
+    for (const s of [-1, 1]) {
+      add(new THREE.BoxGeometry(T * 0.7, wallH, GOAL_DEPTH), this.mats.rail, s * sideX, wallY, -GOAL_DEPTH / 2);
+      add(new THREE.BoxGeometry(0.09, 0.07, GOAL_DEPTH), mats.neon, s * sideX, H + 0.03, -GOAL_DEPTH / 2, false);
+      // Pfosten mit runder Kappe
+      add(new THREE.CylinderGeometry(0.24, 0.24, H + 0.1, 20), mats.post, s * e.half, (H + 0.1) / 2, 0);
+      add(new THREE.SphereGeometry(0.24, 20, 10), mats.post, s * e.half, H + 0.1, 0);
+    }
+    add(new THREE.BoxGeometry(w + T * 1.4, wallH, T * 0.7), this.mats.rail, 0, wallY, -GOAL_DEPTH - T * 0.35);
+    add(new THREE.BoxGeometry(w + T * 1.4, 0.07, 0.09), mats.neon, 0, H + 0.03, -GOAL_DEPTH - T * 0.35, false);
+    const net = add(new THREE.PlaneGeometry(w, wallH - 0.05), mats.net, 0, wallY, -GOAL_DEPTH + 0.01, false);
+    net.renderOrder = 1;
+    add(new THREE.BoxGeometry(w, 0.01, 0.14), mats.neon, 0, 0.016, 0, false);   // Torlinie
+    return g;
   }
 
   setupLabels(view, show) {
@@ -174,9 +183,9 @@ export class Renderer {
       const el = document.createElement('div');
       el.className = 'label';
       el.style.setProperty('--c', PLAYER_COLORS[p.colorIndex].css);
-      el.hidden = !show;
+      el.hidden = true;
       this.labelsEl.append(el);
-      return { el, key: '' };
+      return { el, key: '', show };
     });
   }
 
@@ -184,6 +193,10 @@ export class Renderer {
     const w = innerWidth, h = innerHeight;
     this.renderer.setSize(w, h);
     this.camera.aspect = w / h;
+    this.placeCamera();
+  }
+
+  placeCamera() {
     const tan = Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2));
     const dist = Math.max(this.fitRadius / tan, this.fitRadius / (tan * this.camera.aspect));
     const dir = new THREE.Vector3(this.viewDir.x * CAMERA_TILT, 1, this.viewDir.y * CAMERA_TILT).normalize();
@@ -209,14 +222,9 @@ export class Renderer {
   }
 
   goalEffect(victimIndex, x, y) {
-    const ev = this.edgeViews.find(v => v.edge.owner === victimIndex);
-    if (ev) ev.flash = 1;
+    this.flash[victimIndex] = 1;
     this.shake = 0.35;
-    this.burst(x, y, PLAYER_COLORS[this.colorOf(victimIndex)].hex);
-  }
-
-  colorOf(index) {
-    return this.colorIndexes?.[index] ?? index;
+    this.burst(x, y, this.playerMats[victimIndex].neon.color.getHex());
   }
 
   burst(x, y, color) {
@@ -236,12 +244,17 @@ export class Renderer {
   }
 
   update(view, dt, overrides = {}) {
-    this.colorIndexes = view.players.map(p => p.colorIndex);
+    if (view.arena !== this.builtArena) this.buildTable(view);
+
     view.players.forEach((p, i) => {
       const m = this.mallets[i];
       m.visible = p.alive;
       const pos = i === overrides.ownIndex && overrides.ownMallet ? overrides.ownMallet : p.mallet;
       m.position.set(pos.x, 0, pos.y);
+      this.flash[i] = Math.max(0, this.flash[i] - dt * 1.5);
+      const mats = this.playerMats[i];
+      mats.floor.emissiveIntensity = 0.3 + this.flash[i] * 2.5;
+      mats.neon.emissiveIntensity = 1.2 + this.flash[i] * 4;
     });
     view.pucks.forEach((pk, i) => {
       const pm = this.puckMeshes[i];
@@ -261,20 +274,6 @@ export class Renderer {
       pm.userData.ring.material.color.setHex(c);
     });
 
-    for (const ev of this.edgeViews) {
-      if (!ev.gate) continue;
-      const owner = view.players[ev.edge.owner];
-      ev.flash = Math.max(0, ev.flash - dt * 1.5);
-      ev.goalMat.emissiveIntensity = owner.alive ? 0.7 + ev.flash * 4 : 0.05;
-      if (!owner.alive) {
-        ev.gate.visible = true;
-        ev.gateY = Math.min(1, ev.gateY + dt * 2.5);
-        ev.gate.position.y = TABLE.railHeight / 2 - (1 - ev.gateY) * TABLE.railHeight;
-        ev.zoneMat.opacity = 0.03;
-        if (ev.lineMat) ev.lineMat.opacity = 0.12;
-      }
-    }
-
     for (let i = this.particles.length - 1; i >= 0; i--) {
       const p = this.particles[i];
       p.life -= dt;
@@ -285,11 +284,18 @@ export class Renderer {
       });
       p.points.geometry.attributes.position.needsUpdate = true;
       p.points.material.opacity = Math.max(0, p.life / 1.2);
-      if (p.life <= 0) { this.scene.remove(p.points); disposeTree(p.points); this.particles.splice(i, 1); }
+      if (p.life <= 0) { this.scene.remove(p.points); disposeTree(p.points, true); this.particles.splice(i, 1); }
     }
 
+    // Kamera folgt dem eigenen Tor und zoomt mit, wenn das Feld schrumpft
+    const me = view.players[this.myIndex];
+    if (me?.edge) {
+      const k = 1 - Math.exp(-dt * 6);
+      this.viewDir.lerp(new THREE.Vector2(me.edge.n.x, me.edge.n.y), k).normalize();
+    }
+    this.fitRadius += (this.fitTarget - this.fitRadius) * (1 - Math.exp(-dt * 3));
+    this.placeCamera();
     this.shake = Math.max(0, this.shake - dt);
-    this.camera.position.copy(this.basePos);
     if (this.shake > 0) {
       const s = this.shake * 0.8;
       this.camera.position.x += (Math.random() - 0.5) * s;
@@ -304,22 +310,35 @@ export class Renderer {
     const v = new THREE.Vector3();
     view.players.forEach((p, i) => {
       const lab = this.labels[i];
+      lab.el.hidden = !lab.show || !p.edge;
       if (lab.el.hidden) return;
-      const e = p.edge, off = TABLE.railThickness + 1.3;
+      const e = p.edge, off = GOAL_DEPTH + TABLE.railThickness + 0.9;
       v.set(e.mid.x + e.n.x * off, 0, e.mid.y + e.n.y * off).project(this.camera);
       // Im Hochformat liegen seitliche Schilder sonst halb außerhalb des Bildschirms
-      const half = lab.el.offsetWidth / 2 + 6;
+      const half = lab.el.offsetWidth / 2 + 6, halfH = lab.el.offsetHeight / 2 + 6;
       const x = Math.min(innerWidth - half, Math.max(half, (v.x + 1) / 2 * innerWidth));
-      lab.el.style.transform = `translate(${x}px, ${(1 - v.y) / 2 * innerHeight}px) translate(-50%, -50%)`;
-      const key = `${p.name}|${p.lives}|${p.alive}`;
+      const y = Math.min(innerHeight - halfH, Math.max(halfH, (1 - v.y) / 2 * innerHeight));
+      lab.el.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%)`;
+      const key = `${p.name}|${p.lives}`;
       if (key === lab.key) return;
       lab.key = key;
-      lab.el.classList.toggle('out', !p.alive);
       const lives = Number.isFinite(p.lives) ? '●'.repeat(Math.max(0, p.lives)) : '';
-      lab.el.innerHTML = `<b></b><span>${p.alive ? lives : 'raus'}</span>`;
+      lab.el.innerHTML = '<b></b><span></span>';
       lab.el.querySelector('b').textContent = p.name;
+      lab.el.querySelector('span').textContent = lives;
     });
   }
+}
+
+function playerMaterials(color, netMap) {
+  return {
+    post: new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.9, roughness: 0.3 }),
+    neon: new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 1.2 }),
+    floor: new THREE.MeshStandardMaterial({ color: 0x0b0f18, emissive: color, emissiveIntensity: 0.3, roughness: 0.6 }),
+    net: new THREE.MeshBasicMaterial({ color, map: netMap, transparent: true, opacity: 0.85, depthWrite: false, side: THREE.DoubleSide }),
+    zone: new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.09, depthWrite: false }),
+    zoneLine: new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.4 }),
+  };
 }
 
 function rail(a, b, n, material) {
@@ -398,6 +417,22 @@ function holeTexture() {
   return tex;
 }
 
+function netTexture() {
+  const c = document.createElement('canvas');
+  c.width = 256;
+  c.height = 64;
+  const ctx = c.getContext('2d');
+  ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+  ctx.lineWidth = 2;
+  for (let x = -64; x < 320; x += 16) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x + 64, 64); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x + 64, 0); ctx.lineTo(x, 64); ctx.stroke();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
 // Teil des Vielecks mit p·n >= c (Sutherland-Hodgman für eine Halbebene)
 function clipHalfPlane(poly, n, c) {
   const out = [], dot = p => p.x * n.x + p.y * n.y;
@@ -414,10 +449,12 @@ function clipHalfPlane(poly, n, c) {
   return out;
 }
 
-function disposeTree(obj) {
+// Gibt Geometrien frei; Materialien nur mit withMaterials (die Tisch-Materialien werden wiederverwendet)
+function disposeTree(obj, withMaterials) {
   obj.traverse(o => {
     o.geometry?.dispose();
+    if (!withMaterials) return;
     const mats = Array.isArray(o.material) ? o.material : o.material ? [o.material] : [];
-    for (const m of mats) { m.map?.dispose(); m.dispose(); }
+    for (const m of mats) m.dispose();
   });
 }

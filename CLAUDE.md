@@ -1,14 +1,15 @@
 # Hex Hockey
 
-3D-Airhockey in Draufsicht für 2–6 Spieler, jeder auf seinem eigenen Handy (auch iPhone). Jeder Spieler hat ein eigenes Tor an einer Seite eines Vielecks (2 Spieler: Quadrat, 3: Sechseck mit Banden dazwischen, 4–6: Vieleck mit so vielen Seiten wie Spieler). Jedes Gegentor kostet ein Leben; wer keine mehr hat, scheidet aus und sein Tor wird zugemauert. Der Letzte gewinnt.
+3D-Airhockey in Draufsicht für 2–6 Spieler, jeder auf seinem eigenen Handy (auch iPhone). Jeder Spieler hat ein eigenes Tor; die Tore liegen gleichmäßig auf einem Kreis und die Banden verbinden die Torpfosten direkt (keine Ecken; nur bei 2 Spielern knicken sie nach außen, sonst wäre es ein Schlauch). Jedes Gegentor kostet ein Leben; wer keine mehr hat, scheidet aus: sein Tor verschwindet, die übrigen rücken zusammen und das Feld wird kleiner. Der Letzte gewinnt.
 
 Reines HTML/CSS/JS mit nativen ES-Modulen, kein Build-Schritt (Node ist nicht installiert). Three.js, PeerJS und qrcode-generator kommen per CDN (`index.html`).
 Lokal starten: `python3 tools/serve.py` (Port 8010, ohne Browser-Cache; Konfiguration in `.claude/launch.json`).
 
 ## Aufbau
 - `js/config.js` – alle Konstanten: Farben, Tischmaße, Physik, KI-Stufen, Netzwerk
-- `js/arena.js` – Geometrie des Vielecks; Seite 0 liegt unten, `owner` = Spielerindex oder -1 (Bande)
-- `js/physics.js` – Simulation (feste Schrittweite 1/240 s), läuft nur auf dem Host; `snapshot()` für die Mitspieler
+- `js/arena.js` – Feldgeometrie aus einer Tor-Liste (`evenLayout` → `buildArena`): Kanten mit Normalen nach außen, `goal`-Kanten = Tormund, Spielerzonen als Tortenstück (`planes`) bis `zoneDepth`; `closing` = Tor, das gerade verschwindet
+- Nach einem Ausscheiden: `Simulation.morph` verschiebt die Tore über `MORPH_TIME`, Pucks ruhen solange; der Renderer baut den Tisch neu, sobald sich `view.arena` ändert
+- `js/physics.js` – Simulation (feste Schrittweite 1/240 s), läuft nur auf dem Host; `snapshot()` für die Mitspieler. Der Puck ist fest: `keepPucksSolid()` schiebt Schläger zurück, statt ihn überlappen zu lassen (auf Mitspieler-Handys macht `keepPucksOutside()` dasselbe für die Anzeige)
 - `js/ai.js` – KI-Gegner (verteidigen, hinter den Puck kommen, durchschlagen)
 - `js/render.js` – Three.js-Szene; zeichnet einen „View“ (Simulation oder deren Abbild), Kamera dreht sich so, dass das eigene Tor unten ist
 - `js/net.js` – Räume über WebRTC/PeerJS: Peer-ID = `hexhockey-v1-<CODE>`; der öffentliche PeerJS-Server vermittelt nur, die Daten gehen direkt zwischen den Handys
@@ -17,7 +18,7 @@ Lokal starten: `python3 tools/serve.py` (Port 8010, ohne Browser-Cache; Konfigur
 
 ## Netzwerk-Protokoll
 - Mitspieler → Host: `hello {name}`, `in {x, y}` (Fingerziel in Feldkoordinaten), `ping`
-- Host → Mitspieler: `lobby`, `start {players, settings, you}`, `s` (Schnappschuss 30×/s inkl. Ereignisliste `ev`), `busy`, `full`, `closed`, `ping`
+- Host → Mitspieler: `lobby`, `start {players, settings, you}`, `s` (Schnappschuss 30×/s: Schläger `m`, Pucks `p`, Leben `l`, Torlage `g`, Ereignisliste `ev`), `busy`, `full`, `closed`, `ping`
 - Ereignisse: `h` Schlag, `w` Bande, `s` Anstoß, `g` Tor, `x` ausgeschieden, `v` Sieg
 - Verliert ein Mitspieler im Spiel die Verbindung, übernimmt die KI seinen Schläger
 

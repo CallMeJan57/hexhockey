@@ -16,7 +16,10 @@
 
 html, body {
   margin: 0;
+  width: 100%;
   height: 100%;
+  overflow-x: hidden;
+  touch-action: pan-y;
   overflow: hidden;
   background: var(--bg);
   color: var(--text);
@@ -45,10 +48,14 @@ body.playing { user-select: none; -webkit-user-select: none; -webkit-touch-callo
   position: fixed;
   inset: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);   /* Spalte nie breiter als der Bildschirm */
   place-items: center;
   padding: calc(16px + var(--safe-top)) 16px calc(16px + var(--safe-bottom));
   background: radial-gradient(ellipse at center, rgba(7, 9, 15, 0.35), rgba(7, 9, 15, 0.85));
+  overflow-x: hidden;
   overflow-y: auto;
+  overscroll-behavior: none;
+  touch-action: pan-y;   /* nur hoch und runter, nie seitlich */
 }
 
 .panel {

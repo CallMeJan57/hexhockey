@@ -1,6 +1,6 @@
 // Spielsimulation – läuft nur auf dem Host-Handy. Andere Handys bekommen Schnappschüsse (snapshot()).
 import { PHYSICS, TABLE } from './config.js';
-import { depthFrom, fromEdge } from './arena.js';
+import { MORPH_TIME, alongEdge, buildArena, depthFrom, evenLayout, fromEdge, lerpAngle } from './arena.js';
 
 const R = TABLE.malletRadius;
 const r = TABLE.puckRadius;
@@ -9,43 +9,52 @@ export function homePosition(edge) {
   return fromEdge(edge, 0, 1.8);
 }
 
-// Schiebt einen Punkt in die Zone eines Spielers: innerhalb aller Banden, nicht tiefer als zoneDepth
+// Schiebt einen Punkt in die Zone eines Spielers: innerhalb aller Banden, im eigenen Tortenstück,
+// nicht weiter als zoneDepth von der eigenen Torlinie
 export function clampToZone(arena, edge, p) {
-  for (let k = 0; k < 3; k++) {
+  for (let k = 0; k < 4; k++) {
     for (const e of arena.edges) {
       const d = depthFrom(e, p.x, p.y);
       if (d < R) { p.x -= e.n.x * (R - d); p.y -= e.n.y * (R - d); }
     }
     const d = depthFrom(edge, p.x, p.y);
-    if (d > arena.zoneDepth) { p.x += edge.n.x * (d - arena.zoneDepth); p.y += edge.n.y * (d - arena.zoneDepth); }
+    if (d > edge.zoneDepth) { p.x += edge.n.x * (d - edge.zoneDepth); p.y += edge.n.y * (d - edge.zoneDepth); }
+    for (const m of edge.planes) {
+      const v = p.x * m.x + p.y * m.y;
+      if (v > 0) { p.x -= m.x * v; p.y -= m.y * v; }
+    }
   }
   return p;
 }
 
 export class Simulation {
-  // players: [{ name, colorIndex, bot, level }], settings: { lives, pucks }
-  constructor(arena, players, settings, events = {}) {
-    this.arena = arena;
+  // players: [{ name, colorIndex, bot, level }], settings: { lives, pucks, startDelay? }
+  constructor(players, settings, events = {}) {
     this.events = events;
-    this.players = players.map((p, i) => {
-      const edge = arena.edges.find(e => e.owner === i);
-      const home = homePosition(edge);
-      return {
-        ...p, index: i, edge,
-        lives: settings.lives, goals: 0, alive: true,
-        mallet: { x: home.x, y: home.y, vx: 0, vy: 0 },
-        target: null,                    // { x, y, speed } – wohin der Schläger will
-        ai: { timer: 0, target: null },
-      };
-    });
+    this.players = players.map((p, i) => ({
+      ...p, index: i, edge: null,
+      lives: settings.lives, goals: 0, alive: true,
+      mallet: { x: 0, y: 0, vx: 0, vy: 0 },
+      target: null,                    // { x, y, speed } – wohin der Schläger will
+      ai: { timer: 0, target: null },
+    }));
+    this.layout = evenLayout(this.players.map(p => p.index));
+    this.setArena(buildArena(this.layout));
+    for (const p of this.players) Object.assign(p.mallet, homePosition(p.edge));
     this.pucks = Array.from({ length: settings.pucks }, (_, i) => ({
       id: i, x: 0, y: 0, vx: 0, vy: 0, active: false, lastTouch: -1,
       timer: (settings.startDelay ?? PHYSICS.startDelay) + i * 0.9,
     }));
+    this.morph = null;
     this.acc = 0;
     this.over = false;
     this.winner = null;
     this.ranking = [];   // ausgeschiedene Spieler, zuerst ausgeschieden zuerst
+  }
+
+  setArena(arena) {
+    this.arena = arena;
+    for (const p of this.players) p.edge = p.alive ? arena.goalEdges.get(p.index) ?? null : null;
   }
 
   advance(dt) {
@@ -58,10 +67,12 @@ export class Simulation {
   }
 
   step(h) {
+    if (this.morph) this.stepMorph(h);
     for (const p of this.players) if (p.alive) this.moveMallet(p, h);
     this.separateMallets();
     for (const pk of this.pucks) this.updatePuck(pk, h);
     this.collidePucks();
+    this.keepPucksSolid();
   }
 
   moveMallet(p, h) {
@@ -96,7 +107,7 @@ export class Simulation {
   updatePuck(pk, h) {
     if (!pk.active) {
       pk.timer -= h;
-      if (pk.timer <= 0) this.serve(pk);
+      if (pk.timer <= 0 && !this.morph) this.serve(pk);
       return;
     }
     const f = Math.max(0, 1 - PHYSICS.puckFriction * h);
@@ -120,33 +131,34 @@ export class Simulation {
       }
     }
 
+    for (const post of this.arena.posts) {
+      const dx = pk.x - post.x, dy = pk.y - post.y, minD = r + TABLE.postRadius;
+      const d2 = dx * dx + dy * dy;
+      if (d2 >= minD * minD) continue;
+      const d = Math.sqrt(d2) || 1e-6, nx = dx / d, ny = dy / d;
+      pk.x = post.x + nx * minD; pk.y = post.y + ny * minD;
+      const vn = pk.vx * nx + pk.vy * ny;
+      if (vn < 0) {
+        pk.vx -= (1 + PHYSICS.wallRestitution) * vn * nx;
+        pk.vy -= (1 + PHYSICS.wallRestitution) * vn * ny;
+        this.events.wall?.(-vn);
+      }
+    }
+
+    // Schon hinter einer Torlinie? Dann gelten nur noch die Pfosten, bis der Puck ganz drin ist.
     for (const e of this.arena.edges) {
-      if (!e.goalOpen) continue;
-      for (const s of [-1, 1]) {
-        const px = e.mid.x + e.t.x * e.goalHalf * s, py = e.mid.y + e.t.y * e.goalHalf * s;
-        const dx = pk.x - px, dy = pk.y - py, minD = r + TABLE.postRadius;
-        const d2 = dx * dx + dy * dy;
-        if (d2 >= minD * minD) continue;
-        const d = Math.sqrt(d2) || 1e-6, nx = dx / d, ny = dy / d;
-        pk.x = px + nx * minD; pk.y = py + ny * minD;
-        const vn = pk.vx * nx + pk.vy * ny;
-        if (vn < 0) {
-          pk.vx -= (1 + PHYSICS.wallRestitution) * vn * nx;
-          pk.vy -= (1 + PHYSICS.wallRestitution) * vn * ny;
-          this.events.wall?.(-vn);
-        }
+      if (!e.goal) continue;
+      const d = depthFrom(e, pk.x, pk.y);
+      if (d < 0 && Math.abs(alongEdge(e, pk.x, pk.y)) < e.half + r) {
+        if (d < -r * 1.1) this.goal(e, pk);
+        return;
       }
     }
 
     for (const e of this.arena.edges) {
       const d = depthFrom(e, pk.x, pk.y);
       if (d >= r) continue;
-      const u = pk.x * e.t.x + pk.y * e.t.y;
-      const inMouth = e.goalOpen && (Math.abs(u) < e.goalHalf || (d < 0 && Math.abs(u) < e.goalHalf + r));
-      if (inMouth) {
-        if (d < -r * 1.1) { this.goal(e, pk); return; }
-        continue;
-      }
+      if (e.goal && Math.abs(alongEdge(e, pk.x, pk.y)) < e.half) continue;   // Tormund
       pk.x -= e.n.x * (r - d); pk.y -= e.n.y * (r - d);
       const vn = pk.vx * e.n.x + pk.vy * e.n.y;
       if (vn > 0) {
@@ -185,6 +197,25 @@ export class Simulation {
     }
   }
 
+  // Der Puck ist fest: Drückt ein Schläger ihn gegen die Bande, weicht der Schläger zurück statt den Puck zu schlucken
+  keepPucksSolid() {
+    const minD = r + R;
+    for (const pk of this.pucks) {
+      if (!pk.active) continue;
+      for (const p of this.players) {
+        if (!p.alive) continue;
+        const m = p.mallet;
+        let dx = m.x - pk.x, dy = m.y - pk.y, d = Math.hypot(dx, dy);
+        if (d >= minD) continue;
+        const nx = d > 1e-6 ? dx / d : 1, ny = d > 1e-6 ? dy / d : 0;
+        m.x = pk.x + nx * minD; m.y = pk.y + ny * minD;
+        clampToZone(this.arena, p.edge, m);
+        dx = pk.x - m.x; dy = pk.y - m.y; d = Math.hypot(dx, dy);
+        if (d < minD && d > 1e-6) { pk.x = m.x + dx / d * minD; pk.y = m.y + dy / d * minD; }
+      }
+    }
+  }
+
   serve(pk) {
     const alive = this.players.filter(p => p.alive);
     const target = alive[Math.floor(Math.random() * alive.length)];
@@ -212,7 +243,6 @@ export class Simulation {
     if (victim.lives > 0) return;
 
     victim.alive = false;
-    edge.goalOpen = false;
     this.ranking.push(victim.index);
     this.events.eliminated?.(victim.index);
     const alive = this.players.filter(p => p.alive);
@@ -221,7 +251,40 @@ export class Simulation {
       this.winner = alive[0] ?? null;
       if (this.winner) this.ranking.push(this.winner.index);
       this.events.win?.(this.winner ? this.winner.index : -1);
+      return;
     }
+
+    // Sein Tor verschwindet, die übrigen rücken zusammen. Solange ruhen alle Pucks.
+    if (this.morph) this.finishMorph();
+    const owners = this.layout.map(g => g.owner).filter(o => o !== victim.index);
+    this.morph = { from: this.layout.map(g => ({ ...g })), to: evenLayout(owners, this.layout), owner: victim.index, t: 0 };
+    for (const p of this.pucks) { p.active = false; p.timer = PHYSICS.serveDelay; }
+  }
+
+  stepMorph(h) {
+    const m = this.morph;
+    m.t = Math.min(1, m.t + h / MORPH_TIME);
+    if (m.t >= 1) { this.finishMorph(); return; }
+    const s = m.t * m.t * (3 - 2 * m.t);
+    const goals = m.from.map(g => {
+      if (g.owner === m.owner) return { ...g, closing: true, s, half: g.half * (1 - s) };
+      const to = m.to.find(x => x.owner === g.owner);
+      return { ...g, angle: lerpAngle(g.angle, to.angle, s), radius: g.radius + (to.radius - g.radius) * s };
+    });
+    // Das verschwindende Tor wandert in die Mitte zwischen seine Nachbarn
+    const i = goals.findIndex(g => g.closing), n = goals.length;
+    const prev = goals[(i - 1 + n) % n].angle;
+    let next = goals[(i + 1) % n].angle;
+    while (next <= prev) next += Math.PI * 2;
+    goals[i].angle = lerpAngle(m.from[i].angle, (prev + next) / 2, s);
+    this.layout = goals;
+    this.setArena(buildArena(goals));
+  }
+
+  finishMorph() {
+    this.layout = this.morph.to;
+    this.morph = null;
+    this.setArena(buildArena(this.layout));
   }
 
   // Kompakter Zustand für die anderen Handys
@@ -231,6 +294,12 @@ export class Simulation {
       m: this.players.map(p => [q(p.mallet.x), q(p.mallet.y)]),
       p: this.pucks.map(pk => [pk.active ? 1 : 0, q(pk.x), q(pk.y), q(pk.vx), q(pk.vy), q(pk.timer), pk.lastTouch]),
       l: this.players.map(p => p.lives),
+      g: this.layout.map(g => [g.owner, Math.round(g.angle * 1e4) / 1e4, q(g.half), q(g.radius), g.closing ? Math.round(g.s * 1e3) / 1e3 : -1]),
     };
   }
+}
+
+// Gegenstück zu snapshot().g auf den Mitspieler-Handys
+export function layoutFromSnapshot(g) {
+  return g.map(([owner, angle, half, radius, s]) => ({ owner, angle, half, radius, closing: s >= 0, s: Math.max(0, s) }));
 }

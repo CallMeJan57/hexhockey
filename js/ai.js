@@ -13,7 +13,7 @@ export function aiTarget(p, sim, dt) {
 }
 
 function chooseTarget(p, sim, level) {
-  const e = p.edge, D = sim.arena.zoneDepth, m = p.mallet;
+  const e = p.edge, D = e.zoneDepth, m = p.mallet;
   const noise = () => (Math.random() - 0.5) * level.error;
 
   let best = null, bestScore = Infinity;
@@ -45,9 +45,9 @@ function chooseTarget(p, sim, level) {
     const defD = Math.min(2.2, D);
     const time = (d - defD) / vn;
     const vu = best.vx * e.t.x + best.vy * e.t.y;
-    const lim = e.goalHalf + 0.6;
+    const lim = e.half + 0.6;
     const pu = Math.max(-lim, Math.min(lim, u + vu * time));
     return fromEdge(e, pu + noise(), defD);
   }
-  return fromEdge(e, Math.max(-e.goalHalf, Math.min(e.goalHalf, u * 0.4)), 2);
+  return fromEdge(e, Math.max(-e.half, Math.min(e.half, u * 0.4)), 2);
 }

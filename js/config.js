@@ -12,7 +12,6 @@ export const PLAYER_COLORS = [
 export const MAX_PLAYERS = PLAYER_COLORS.length;
 
 export const TABLE = {
-  apothem: 10,          // Abstand Mitte → Bande
   goalWidth: 4.4,
   puckRadius: 0.55,
   malletRadius: 0.95,
@@ -20,13 +19,6 @@ export const TABLE = {
   railHeight: 0.6,
   railThickness: 0.5,
 };
-
-// Wie weit jeder Schläger von seiner Bande nach innen darf – abhängig von der Spielerzahl
-export function zoneDepthFor(playerCount) {
-  if (playerCount <= 2) return 7.5;
-  if (playerCount === 3) return 6.2;
-  return 5.4;
-}
 
 export const PHYSICS = {
   step: 1 / 240,
