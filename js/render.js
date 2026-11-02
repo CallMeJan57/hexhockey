@@ -4,7 +4,7 @@
 import * as THREE from 'three';
 import { PLAYER_COLORS, TABLE } from './config.js';
 
-const CAMERA_TILT = 0.32;   // 0 = genau von oben
+const CAMERA_TILT = 0.45;   // 0 = genau von oben
 const GOAL_DEPTH = 1.5;     // Tiefe des Torkastens hinter der Torlinie
 const SINK = 0.3;           // so tief liegt der Boden des Torkastens
 
@@ -146,9 +146,10 @@ export class Renderer {
     this.fitTarget = arena.extent + GOAL_DEPTH + 1.2;
   }
 
-  // Torkasten: leuchtende Pfosten, versenkter Boden, Seitenwände mit Leuchtkante, Netz an der Rückwand
+  // Tor im Stil der Schläger: glänzende Pfosten mit Leuchtring und Knauf, Querlatte, farbiger Torkasten
+  // mit runden Leuchtkanten und Netz an der Rückwand
   goal(e, mats) {
-    const T = TABLE.railThickness, H = TABLE.railHeight, w = e.half * 2;
+    const T = TABLE.railThickness, H = TABLE.railHeight, w = e.half * 2, P = TABLE.postRadius;
     const g = new THREE.Group();
     g.position.set(e.mid.x, 0, e.mid.y);
     g.rotation.y = Math.atan2(-e.t.y, e.t.x);   // lokal: x entlang der Torlinie, -z nach außen
@@ -159,21 +160,31 @@ export class Renderer {
       g.add(m);
       return m;
     };
-    const wallH = H + SINK, wallY = (H - SINK) / 2, sideX = e.half + T * 0.35;
+    const wallH = H + SINK, wallY = (H - SINK) / 2, sideX = e.half + T * 0.35, backZ = -GOAL_DEPTH - T * 0.35;
+    const postH = H + 0.75, barY = postH - 0.12, rim = 0.09;
 
     add(new THREE.BoxGeometry(w + T, 0.05, GOAL_DEPTH), mats.floor, 0, -SINK, -GOAL_DEPTH / 2, false);
     for (const s of [-1, 1]) {
-      add(new THREE.BoxGeometry(T * 0.7, wallH, GOAL_DEPTH), this.mats.rail, s * sideX, wallY, -GOAL_DEPTH / 2);
-      add(new THREE.BoxGeometry(0.09, 0.07, GOAL_DEPTH), mats.neon, s * sideX, H + 0.03, -GOAL_DEPTH / 2, false);
-      // Pfosten mit runder Kappe
-      add(new THREE.CylinderGeometry(0.24, 0.24, H + 0.1, 20), mats.post, s * e.half, (H + 0.1) / 2, 0);
-      add(new THREE.SphereGeometry(0.24, 20, 10), mats.post, s * e.half, H + 0.1, 0);
+      // Seitenwand mit runder Leuchtkante
+      add(new THREE.BoxGeometry(T * 0.7, wallH, GOAL_DEPTH), mats.body, s * sideX, wallY, -GOAL_DEPTH / 2);
+      add(new THREE.CylinderGeometry(rim, rim, GOAL_DEPTH, 12).rotateX(Math.PI / 2), mats.ring, s * sideX, H + 0.02, -GOAL_DEPTH / 2, false);
+      // Pfosten wie ein kleiner Schläger: Sockel, Leuchtring, Säule, Knauf
+      const x = s * e.half;
+      add(new THREE.CylinderGeometry(P, P * 1.05, 0.3, 32), mats.body, x, 0.15, 0);
+      add(new THREE.TorusGeometry(P * 0.8, 0.06, 10, 32).rotateX(Math.PI / 2), mats.ring, x, 0.31, 0, false);
+      add(new THREE.CylinderGeometry(P * 0.55, P * 0.6, postH - 0.3, 24), mats.body, x, 0.3 + (postH - 0.3) / 2, 0);
+      const knob = add(new THREE.SphereGeometry(P * 0.62, 24, 14), mats.body, x, postH, 0);
+      knob.scale.y = 0.75;
     }
-    add(new THREE.BoxGeometry(w + T * 1.4, wallH, T * 0.7), this.mats.rail, 0, wallY, -GOAL_DEPTH - T * 0.35);
-    add(new THREE.BoxGeometry(w + T * 1.4, 0.07, 0.09), mats.neon, 0, H + 0.03, -GOAL_DEPTH - T * 0.35, false);
+    // Querlatte zwischen den Pfosten
+    add(new THREE.CylinderGeometry(0.13, 0.13, w, 20).rotateZ(Math.PI / 2), mats.body, 0, barY, 0);
+    add(new THREE.TorusGeometry(0.15, 0.04, 8, 20).rotateY(Math.PI / 2), mats.ring, 0, barY, 0, false);
+    // Rückwand mit Leuchtkante und Netz
+    add(new THREE.BoxGeometry(w + T * 1.4, wallH, T * 0.7), mats.body, 0, wallY, backZ);
+    add(new THREE.CylinderGeometry(rim, rim, w + T * 1.4, 12).rotateZ(Math.PI / 2), mats.ring, 0, H + 0.02, backZ, false);
     const net = add(new THREE.PlaneGeometry(w, wallH - 0.05), mats.net, 0, wallY, -GOAL_DEPTH + 0.01, false);
     net.renderOrder = 1;
-    add(new THREE.BoxGeometry(w, 0.01, 0.14), mats.neon, 0, 0.016, 0, false);   // Torlinie
+    add(new THREE.BoxGeometry(w, 0.01, 0.14), mats.ring, 0, 0.016, 0, false);   // Torlinie
     return g;
   }
 
@@ -224,7 +235,7 @@ export class Renderer {
   goalEffect(victimIndex, x, y) {
     this.flash[victimIndex] = 1;
     this.shake = 0.35;
-    this.burst(x, y, this.playerMats[victimIndex].neon.color.getHex());
+    this.burst(x, y, this.playerMats[victimIndex].floor.emissive.getHex());
   }
 
   burst(x, y, color) {
@@ -253,8 +264,9 @@ export class Renderer {
       m.position.set(pos.x, 0, pos.y);
       this.flash[i] = Math.max(0, this.flash[i] - dt * 1.5);
       const mats = this.playerMats[i];
-      mats.floor.emissiveIntensity = 0.3 + this.flash[i] * 2.5;
-      mats.neon.emissiveIntensity = 1.2 + this.flash[i] * 4;
+      mats.floor.emissiveIntensity = 0.12 + this.flash[i] * 2.5;
+      mats.ring.emissiveIntensity = 1.2 + this.flash[i] * 4;
+      mats.body.emissiveIntensity = 0.15 + this.flash[i] * 1.5;
     });
     view.pucks.forEach((pk, i) => {
       const pm = this.puckMeshes[i];
@@ -332,9 +344,9 @@ export class Renderer {
 
 function playerMaterials(color, netMap) {
   return {
-    post: new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.9, roughness: 0.3 }),
-    neon: new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 1.2 }),
-    floor: new THREE.MeshStandardMaterial({ color: 0x0b0f18, emissive: color, emissiveIntensity: 0.3, roughness: 0.6 }),
+    body: malletBody(color),
+    ring: malletRing(color),
+    floor: new THREE.MeshStandardMaterial({ color: 0x0b0f18, emissive: color, emissiveIntensity: 0.12, roughness: 0.6 }),
     net: new THREE.MeshBasicMaterial({ color, map: netMap, transparent: true, opacity: 0.85, depthWrite: false, side: THREE.DoubleSide }),
     zone: new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.09, depthWrite: false }),
     zoneLine: new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.4 }),
@@ -360,16 +372,17 @@ function strip(a, b, width, material, y) {
   return m;
 }
 
+// Gleiche Materialien für Schläger und Tore
+const malletBody = color => new THREE.MeshStandardMaterial({ color, roughness: 0.35, metalness: 0.2, emissive: color, emissiveIntensity: 0.15 });
+const malletRing = color => new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: color, emissiveIntensity: 1.2 });
+
 function mallet(color) {
   const R = TABLE.malletRadius;
   const g = new THREE.Group();
-  const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.35, metalness: 0.2, emissive: color, emissiveIntensity: 0.15 });
+  const mat = malletBody(color);
   const base = new THREE.Mesh(new THREE.CylinderGeometry(R, R * 1.02, 0.3, 40), mat);
   base.position.y = 0.15;
-  const ring = new THREE.Mesh(
-    new THREE.TorusGeometry(R * 0.8, 0.07, 10, 40),
-    new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: color, emissiveIntensity: 1.2 }),
-  );
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(R * 0.8, 0.07, 10, 40), malletRing(color));
   ring.rotation.x = Math.PI / 2;
   ring.position.y = 0.31;
   const handle = new THREE.Mesh(new THREE.CylinderGeometry(R * 0.4, R * 0.5, 0.55, 28), mat);

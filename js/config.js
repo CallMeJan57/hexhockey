@@ -12,10 +12,10 @@ export const PLAYER_COLORS = [
 export const MAX_PLAYERS = PLAYER_COLORS.length;
 
 export const TABLE = {
-  goalWidth: 4.4,
+  goalWidth: 4.8,
   puckRadius: 0.55,
   malletRadius: 0.95,
-  postRadius: 0.18,
+  postRadius: 0.34,     // so dick wie die Pfosten aussehen
   railHeight: 0.6,
   railThickness: 0.5,
 };
