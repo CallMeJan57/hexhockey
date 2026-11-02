@@ -27,3 +27,10 @@ Lokal starten: `python3 tools/serve.py` (Port 8010, ohne Browser-Cache; Konfigur
 - Zum Spielen mit echten Handys muss die Seite über HTTPS erreichbar sein (z. B. GitHub Pages) – der QR-Code zeigt auf die aktuelle Adresse
 
 - UI-Texte auf Deutsch, Bezeichner im Code auf Englisch
+
+## GitHub & Veröffentlichen
+- Projekt: github.com/CallMeJan57/hexhockey (öffentlich). Seite: https://callmejan57.github.io/hexhockey/ (GitHub Pages, liegt in einem Unterordner – deshalb nur relative Pfade verwenden)
+- Zweige: `main` = Zwischenspeicher, `live` = veröffentlicht (GitHub Pages baut nur `live`)
+- Änderungen committen und nach `main` pushen
+- Veröffentlichen (`main` nach `live` mergen, `live` pushen) nur, wenn der Nutzer darum bittet
+- `gh` ist nicht im PATH: `~/Downloads/gh_2.103.3_macOS_amd64/bin/gh`
