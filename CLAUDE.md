@@ -19,7 +19,7 @@ Lokal starten: `python3 tools/serve.py` (Port 8010, ohne Browser-Cache; Konfigur
 ## Netzwerk-Protokoll
 - Mitspieler → Host: `hello {name}`, `in {x, y}` (Fingerziel in Feldkoordinaten), `ping`
 - Host → Mitspieler: `lobby`, `start {players, settings, you}`, `s` (Schnappschuss 30×/s: Schläger `m`, Pucks `p`, Leben `l`, Torlage `g`, Ereignisliste `ev`), `busy`, `full`, `closed`, `ping`
-- Ereignisse: `h` Schlag, `w` Bande, `s` Anstoß, `g` Tor, `x` ausgeschieden, `v` Sieg
+- Ereignisse: `h` Schlag, `w` Bande, `s` Anstoß, `g` Tor, `x` ausgeschieden, `v` Sieg, `r` Puck hing fest und kommt neu in die Mitte (`PHYSICS.stuckTime`/`stuckRadius`)
 - Verliert ein Mitspieler im Spiel die Verbindung, übernimmt die KI seinen Schläger
 
 ## Handy

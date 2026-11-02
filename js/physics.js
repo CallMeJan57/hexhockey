@@ -168,6 +168,17 @@ export class Simulation {
       }
     }
 
+    // Hängt der Puck fest (Ecke, Bande, zwischen zwei Schlägern)? Nach stuckTime neu in die Mitte.
+    if (!pk.anchor || Math.hypot(pk.x - pk.anchor.x, pk.y - pk.anchor.y) > PHYSICS.stuckRadius) {
+      pk.anchor = { x: pk.x, y: pk.y };
+      pk.stuck = 0;
+    } else if ((pk.stuck += h) > PHYSICS.stuckTime) {
+      this.events.rescue?.(pk.x, pk.y);
+      pk.active = false;
+      pk.timer = 0.7;   // fällt gleich wieder in der Mitte herunter
+      return;
+    }
+
     const s = Math.hypot(pk.vx, pk.vy);
     if (s > PHYSICS.puckMaxSpeed) {
       pk.vx *= PHYSICS.puckMaxSpeed / s; pk.vy *= PHYSICS.puckMaxSpeed / s;
@@ -229,6 +240,7 @@ export class Simulation {
     pk.vy = Math.sin(ang) * PHYSICS.serveSpeed;
     pk.active = true;
     pk.lastTouch = -1;
+    pk.anchor = null;
     this.events.serve?.();
   }
 

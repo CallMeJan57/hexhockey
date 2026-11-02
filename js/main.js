@@ -198,6 +198,7 @@ const hostEvents = {
   goal: (victim, scorer, x, y) => emit(['g', victim, scorer, Math.round(x * 10) / 10, Math.round(y * 10) / 10]),
   eliminated: i => emit(['x', i]),
   win: i => emit(['v', i]),
+  rescue: (x, y) => emit(['r', Math.round(x * 10) / 10, Math.round(y * 10) / 10]),
 };
 
 // ---------- Mitspieler ----------
@@ -348,6 +349,7 @@ function handleEvent(ev) {
     case 'h': sfx.hit(ev[1]); break;
     case 'w': sfx.wall(ev[1]); break;
     case 's': sfx.serve(); break;
+    case 'r': renderer.burst(ev[1], ev[2], 0xe8f4ff); sfx.rescue(); break;
     case 'g': {
       const [, victim, scorer, x, y] = ev;
       sfx.goal();

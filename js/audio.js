@@ -49,6 +49,10 @@ export const sfx = {
     if (this.muted) return;
     tone({ freq: 660, type: 'sine', dur: 0.12, vol: 0.15 });
   },
+  rescue() {
+    if (this.muted) return;
+    tone({ freq: 300, type: 'sine', dur: 0.25, vol: 0.15, slide: 2.5 });
+  },
   goal() {
     if (this.muted) return;
     tone({ freq: 520, type: 'sawtooth', dur: 0.5, vol: 0.18, slide: 0.45 });

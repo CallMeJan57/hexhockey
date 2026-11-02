@@ -31,6 +31,8 @@ export const PHYSICS = {
   serveSpeed: 9,
   serveDelay: 1.4,
   startDelay: 3.2,
+  stuckTime: 5,       // so lange darf ein Puck in einem kleinen Bereich hängen …
+  stuckRadius: 3,     // … dann kommt er neu in die Mitte
 };
 
 export const AI_LEVELS = {
