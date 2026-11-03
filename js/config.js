@@ -22,13 +22,13 @@ export const TABLE = {
 
 export const PHYSICS = {
   step: 1 / 240,
-  malletMaxSpeed: 38,   // Schläger folgen dem Finger, aber nicht schneller als das
-  puckMaxSpeed: 42,
+  malletMaxSpeed: 33,   // Schläger folgen dem Finger, aber nicht schneller als das
+  puckMaxSpeed: 35,
   puckMinSpeed: 2.5,
   puckFriction: 0.22,
   wallRestitution: 0.9,
   malletRestitution: 0.95,
-  serveSpeed: 9,
+  serveSpeed: 7.8,
   serveDelay: 1.4,
   startDelay: 3.2,
   stuckTime: 5,       // so lange darf ein Puck in einem kleinen Bereich hängen …
