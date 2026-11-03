@@ -33,9 +33,12 @@ export class Renderer {
     this.scene.add(sun);
 
     this.mats = {
-      body: new THREE.MeshStandardMaterial({ color: 0x0c111b, roughness: 0.8 }),
+      body: new THREE.MeshStandardMaterial({ color: 0x182133, roughness: 0.7 }),
       surface: new THREE.MeshStandardMaterial({ map: holeTexture(), roughness: 0.32, metalness: 0.08 }),
-      rail: new THREE.MeshStandardMaterial({ color: 0x1d2536, metalness: 0.55, roughness: 0.3 }),
+      rail: new THREE.MeshStandardMaterial({ color: 0x55657f, metalness: 0.45, roughness: 0.35, emissive: 0x16233a }),
+      // Leuchtende Oberkante und Linie am Fuß der Banden, damit der Rand auch auf kleinen Bildschirmen klar ist
+      railTop: new THREE.MeshBasicMaterial({ color: 0xbfe3ff }),
+      edge: new THREE.MeshBasicMaterial({ color: 0x8cc4ff, transparent: true, opacity: 0.6 }),
       line: new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.22 }),
     };
     this.netTexture = netTexture();
@@ -112,7 +115,7 @@ export class Renderer {
 
     for (const e of arena.edges) {
       if (e.goal) g.add(this.goal(e, this.playerMats[e.owner]));
-      else g.add(rail(e.a, e.b, e.n, this.mats.rail));
+      else g.add(rail(e.a, e.b, e.n, this.mats));
     }
     // Stöße zwischen zwei Banden abdecken (Torpfosten haben eigene Säulen)
     const T = TABLE.railThickness, H = TABLE.railHeight;
@@ -122,7 +125,9 @@ export class Renderer {
       const joint = new THREE.Mesh(new THREE.CylinderGeometry(T * 0.75, T * 0.75, H, 20), this.mats.rail);
       joint.position.set(v.x + v.x / len * T * 0.45, H / 2, v.y + v.y / len * T * 0.45);
       joint.castShadow = true;
-      g.add(joint);
+      const cap = new THREE.Mesh(new THREE.CylinderGeometry(T * 0.3, T * 0.3, 0.04, 16), this.mats.railTop);
+      cap.position.set(v.x, H + 0.02, v.y);
+      g.add(joint, cap);
     }
 
     // Spielerzonen (Tortenstücke) mit Rand
@@ -356,15 +361,23 @@ function playerMaterials(color, netMap) {
   };
 }
 
-function rail(a, b, n, material) {
+function rail(a, b, n, mats) {
   const T = TABLE.railThickness, H = TABLE.railHeight;
   const len = Math.hypot(b.x - a.x, b.y - a.y);
-  const m = new THREE.Mesh(new THREE.BoxGeometry(len, H, T), material);
-  m.position.set((a.x + b.x) / 2 + n.x * T / 2, H / 2, (a.y + b.y) / 2 + n.y * T / 2);
-  m.rotation.y = Math.atan2(-(b.y - a.y), b.x - a.x);
-  m.castShadow = true;
-  m.receiveShadow = true;
-  return m;
+  const g = new THREE.Group();
+  g.position.set((a.x + b.x) / 2, 0, (a.y + b.y) / 2);
+  g.rotation.y = Math.atan2(-(b.y - a.y), b.x - a.x);
+  // lokal: x entlang der Bande, -z nach außen (n)
+  const box = new THREE.Mesh(new THREE.BoxGeometry(len, H, T), mats.rail);
+  box.position.set(0, H / 2, -T / 2);
+  box.castShadow = true;
+  box.receiveShadow = true;
+  const top = new THREE.Mesh(new THREE.BoxGeometry(len, 0.04, T * 0.3), mats.railTop);
+  top.position.set(0, H + 0.02, -T * 0.3);
+  const foot = new THREE.Mesh(new THREE.BoxGeometry(len, 0.01, 0.1), mats.edge);
+  foot.position.set(0, 0.013, 0.05);
+  g.add(box, top, foot);
+  return g;
 }
 
 function strip(a, b, width, material, y) {
