@@ -172,6 +172,15 @@ button.icon { padding: 4px 10px; font-size: 20px; line-height: 1; background: tr
 
 #winner { margin: 0; text-align: center; font-size: 32px; font-weight: 900; }
 .place { width: 28px; color: var(--muted); font-weight: 700; }
+#ranking li { gap: 8px; }
+#ranking .place { width: 22px; }
+#ranking .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#ranking .num { width: 36px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; }
+#ranking li.head { min-height: 0; padding-top: 0; padding-bottom: 0; background: none; border-left-color: transparent; }
+#ranking li.head .dot { visibility: hidden; }
+#ranking li.head .num { font-size: 12px; font-weight: 600; color: var(--muted); }
+#topScorer { margin: 0; text-align: center; }
+#modeHint { margin: 0; font-size: 13px; }
 #endHost, #endClient { display: flex; flex-direction: column; gap: 10px; }
 
 /* ---------- Im Spiel ---------- */
@@ -236,6 +245,22 @@ body.with-pad { --pad-total: calc(min(30vh, 260px) + var(--safe-bottom)); }
 @keyframes pop {
   to { transform: translate(-50%, -50%) scale(1); opacity: 1; }
 }
+
+#clock {
+  position: fixed;
+  top: calc(14px + var(--safe-top));
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 14px;
+  border-radius: 999px;
+  background: rgba(14, 19, 30, 0.7);
+  border: 1px solid var(--border);
+  font-size: 20px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+#clock.urgent { color: #ff6b6b; border-color: #ff6b6b; }
 
 #gameUi { position: fixed; top: calc(10px + var(--safe-top)); left: 10px; }
 .round {

@@ -28,12 +28,14 @@ export function clampToZone(arena, edge, p) {
 }
 
 export class Simulation {
-  // players: [{ name, colorIndex, bot, level }], settings: { lives, pucks, startDelay? }
+  // players: [{ name, colorIndex, bot, level }], settings: { mode, lives, minutes, pucks, startDelay? }
+  // mode 'lives': jedes Gegentor kostet ein Leben, der Letzte gewinnt.
+  // mode 'time': niemand scheidet aus; Punkte = Tore − Gegentore, nach Ablauf der Zeit gewinnt der Beste.
   constructor(players, settings, events = {}) {
     this.events = events;
     this.players = players.map((p, i) => ({
       ...p, index: i, edge: null,
-      lives: settings.lives, goals: 0, alive: true,
+      lives: settings.lives, goals: 0, conceded: 0, alive: true,
       mallet: { x: 0, y: 0, vx: 0, vy: 0 },
       target: null,                    // { x, y, speed } – wohin der Schläger will
       ai: { timer: 0, target: null },
@@ -46,6 +48,10 @@ export class Simulation {
       timer: (settings.startDelay ?? PHYSICS.startDelay) + i * 0.9,
     }));
     this.morph = null;
+    this.timed = settings.mode === 'time';
+    this.duration = (settings.minutes ?? 3) * 60;
+    this.clock = -(settings.startDelay ?? PHYSICS.startDelay);   // negativ = Countdown vor dem Anpfiff
+    this.overtime = false;
     this.acc = 0;
     this.over = false;
     this.winner = null;
@@ -66,7 +72,13 @@ export class Simulation {
     if (n >= 60) this.acc = 0;
   }
 
+  get timeLeft() {
+    return Math.max(0, this.duration - Math.max(0, this.clock));
+  }
+
   step(h) {
+    if (this.timed) this.tickClock(h);
+    if (this.over) return;
     if (this.morph) this.stepMorph(h);
     for (const p of this.players) if (p.alive) this.moveMallet(p, h);
     this.separateMallets();
@@ -248,10 +260,15 @@ export class Simulation {
     pk.active = false;
     pk.timer = PHYSICS.serveDelay;
     const victim = this.players[edge.owner];
-    victim.lives--;
+    victim.conceded++;
     const scorer = pk.lastTouch >= 0 && pk.lastTouch !== victim.index ? this.players[pk.lastTouch] : null;
     if (scorer) scorer.goals++;
     this.events.goal?.(victim.index, scorer ? scorer.index : -1, pk.x, pk.y);
+    if (this.timed) {
+      if (this.overtime) this.decideOnTime();
+      return;
+    }
+    victim.lives--;
     if (victim.lives > 0) return;
 
     victim.alive = false;
@@ -271,6 +288,27 @@ export class Simulation {
     const owners = this.layout.map(g => g.owner).filter(o => o !== victim.index);
     this.morph = { from: this.layout.map(g => ({ ...g })), to: evenLayout(owners, this.layout), owner: victim.index, t: 0 };
     for (const p of this.pucks) { p.active = false; p.timer = PHYSICS.serveDelay; }
+  }
+
+  tickClock(h) {
+    this.clock += h;
+    if (this.clock < this.duration || this.overtime) return;
+    if (!this.decideOnTime()) {
+      this.overtime = true;   // Gleichstand an der Spitze: weiter, bis einer allein vorne liegt
+      this.events.overtime?.();
+    }
+  }
+
+  // Zeitmodus: steht ein alleiniger Sieger fest, ist das Spiel vorbei
+  decideOnTime() {
+    const order = standings(this.players);
+    const [a, b] = order;
+    if (b && points(a) === points(b) && a.goals === b.goals) return false;
+    this.over = true;
+    this.winner = a;
+    this.ranking = order.map(p => p.index).reverse();
+    this.events.win?.(a.index);
+    return true;
   }
 
   stepMorph(h) {
@@ -306,10 +344,16 @@ export class Simulation {
       m: this.players.map(p => [q(p.mallet.x), q(p.mallet.y)]),
       p: this.pucks.map(pk => [pk.active ? 1 : 0, q(pk.x), q(pk.y), q(pk.vx), q(pk.vy), q(pk.timer), pk.lastTouch]),
       l: this.players.map(p => p.lives),
+      k: this.players.map(p => [p.goals, p.conceded]),
+      ...(this.timed && { c: Math.round(this.timeLeft * 10) / 10, o: this.overtime ? 1 : 0 }),
       g: this.layout.map(g => [g.owner, Math.round(g.angle * 1e4) / 1e4, q(g.half), q(g.radius), g.closing ? Math.round(g.s * 1e3) / 1e3 : -1]),
     };
   }
 }
+
+// Zeitmodus-Wertung: Punkte = Tore − Gegentore, bei Gleichstand zählen mehr Tore
+export const points = p => p.goals - p.conceded;
+export const standings = players => players.slice().sort((a, b) => points(b) - points(a) || b.goals - a.goals);
 
 // Gegenstück zu snapshot().g auf den Mitspieler-Handys
 export function layoutFromSnapshot(g) {

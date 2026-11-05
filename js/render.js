@@ -24,8 +24,7 @@ export class Renderer {
     this.camera = new THREE.PerspectiveCamera(38, 1, 0.1, 300);
 
     this.scene.add(new THREE.HemisphereLight(0xbcd4ff, 0x10131c, 1.1));
-    const sun = new THREE.DirectionalLight(0xffffff, 2.2);
-    sun.position.set(6, 22, 8);
+    const sun = this.sun = new THREE.DirectionalLight(0xffffff, 2.2);   // dreht mit der Kamera (placeCamera)
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
     Object.assign(sun.shadow.camera, { left: -18, right: 18, top: 18, bottom: -18, near: 1, far: 60 });
@@ -222,6 +221,9 @@ export class Renderer {
     this.camera.up.set(-this.viewDir.x, 0, -this.viewDir.y);   // eigene Seite unten
     this.camera.lookAt(0, 0, 0);
     this.camera.updateProjectionMatrix();
+    // Licht von schräg hinter dem Spieler: so liegt die Spiegelung der glänzenden Fläche für jeden außerhalb des Felds
+    const { x, y } = this.viewDir;
+    this.sun.position.set(y * 6 + x * 8, 22, -x * 6 + y * 8);
   }
 
   // Bildschirmpunkt → Punkt auf dem Tisch (Spielfeld-Koordinaten)
@@ -339,13 +341,16 @@ export class Renderer {
       const x = Math.min(W - half, Math.max(half, (v.x + 1) / 2 * W));
       const y = Math.min(Hh - halfH, Math.max(halfH, (1 - v.y) / 2 * Hh));
       lab.el.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%)`;
-      const key = `${p.name}|${p.lives}`;
+      // Zeitmodus: Punkte (Tore − Gegentore) statt Leben
+      const info = view.timed
+        ? (n => (n > 0 ? `+${n}` : n < 0 ? `−${-n}` : '0'))(p.goals - p.conceded)
+        : Number.isFinite(p.lives) ? '●'.repeat(Math.max(0, p.lives)) : '';
+      const key = `${p.name}|${info}`;
       if (key === lab.key) return;
       lab.key = key;
-      const lives = Number.isFinite(p.lives) ? '●'.repeat(Math.max(0, p.lives)) : '';
       lab.el.innerHTML = '<b></b><span></span>';
       lab.el.querySelector('b').textContent = p.name;
-      lab.el.querySelector('span').textContent = lives;
+      lab.el.querySelector('span').textContent = info;
     });
   }
 }

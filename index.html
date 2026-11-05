@@ -28,6 +28,8 @@
     <canvas id="padCanvas"></canvas>
   </div>
 
+  <div id="clock" hidden></div>
+
   <div id="gameUi" hidden>
     <button id="quitBtn" class="icon round" aria-label="Spiel verlassen">×</button>
   </div>
@@ -54,6 +56,7 @@
           <li>Jeder sieht das Feld von seinem Tor aus. Zieh mit dem Finger, dein Schläger folgt.</li>
           <li>Jedes Gegentor kostet ein Leben. Wer keine mehr hat, scheidet aus und sein Tor wird zugemauert.</li>
           <li>Wer zuletzt übrig ist, gewinnt.</li>
+          <li>Zeitmodus: Niemand scheidet aus. Jedes Tor bringt +1, jedes Gegentor −1 – nach Ablauf der Zeit gewinnt, wer vorne liegt.</li>
           <li>Am besten sind alle im selben WLAN.</li>
         </ul>
       </details>
@@ -72,9 +75,19 @@
       <div id="hostControls">
         <button id="addBot">+ KI-Gegner</button>
         <div class="settings">
-          <label>Leben
+          <label>Modus
+            <select id="mode">
+              <option value="lives">Leben</option><option value="time">Zeit</option>
+            </select>
+          </label>
+          <label id="livesField">Leben
             <select id="lives">
               <option value="3">3</option><option value="5">5</option><option value="7">7</option><option value="10">10</option>
+            </select>
+          </label>
+          <label id="minutesField" hidden>Dauer
+            <select id="minutes">
+              <option value="2">2 Min.</option><option value="3">3 Min.</option><option value="5">5 Min.</option>
             </select>
           </label>
           <label>Pucks
@@ -83,6 +96,7 @@
             </select>
           </label>
         </div>
+        <p id="modeHint" class="muted"></p>
         <button id="startBtn" class="primary">Spiel starten</button>
       </div>
       <p id="clientInfo" class="muted"></p>
@@ -94,6 +108,7 @@
     <div class="panel">
       <h2 id="winner"></h2>
       <ol id="ranking"></ol>
+      <p id="topScorer" class="muted"></p>
       <div id="endHost">
         <button id="againBtn" class="primary">Nochmal</button>
         <button id="toLobbyBtn">Zur Lobby</button>

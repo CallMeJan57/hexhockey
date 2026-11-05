@@ -2,7 +2,7 @@
 // Schnappschüsse; jedes Handy zeigt das Feld so gedreht, dass das eigene Tor unten liegt.
 import { Renderer } from './render.js';
 import { alongEdge, buildArena, depthFrom, evenLayout, fromEdge, zonePolygon } from './arena.js';
-import { Simulation, clampToZone, homePosition, layoutFromSnapshot } from './physics.js';
+import { Simulation, clampToZone, homePosition, layoutFromSnapshot, points, standings } from './physics.js';
 import { aiTarget } from './ai.js';
 import { Host, Client, normalizeCode } from './net.js';
 import { sfx, unlockAudio } from './audio.js';
@@ -24,7 +24,7 @@ let role = null;          // 'host' | 'client' | null (Startseite)
 let mode = 'menu';        // 'menu' | 'lobby' | 'play' | 'end'
 let host = null, client = null;
 let roomCode = '';
-let lobby = { players: [], settings: store.get('settings', { lives: 5, pucks: 2 }) };
+let lobby = { players: [], settings: { mode: 'lives', lives: 5, minutes: 3, pucks: 2, ...store.get('settings', {}) } };
 let sim = null;           // Host-Spiel oder Hintergrund-Demo
 let view = null;          // was gezeichnet wird: sim oder das Abbild auf Mitspieler-Handys
 let myIndex = -1;
@@ -164,9 +164,9 @@ $('#addBot').addEventListener('click', () => {
   broadcastLobby();
 });
 
-for (const key of ['lives', 'pucks']) {
+for (const key of ['mode', 'lives', 'minutes', 'pucks']) {
   $(`#${key}`).addEventListener('change', e => {
-    lobby.settings[key] = Number(e.target.value);
+    lobby.settings[key] = key === 'mode' ? e.target.value : Number(e.target.value);
     store.set('settings', lobby.settings);
     broadcastLobby();
   });
@@ -198,6 +198,7 @@ const hostEvents = {
   goal: (victim, scorer, x, y) => emit(['g', victim, scorer, Math.round(x * 10) / 10, Math.round(y * 10) / 10]),
   eliminated: i => emit(['x', i]),
   win: i => emit(['v', i]),
+  overtime: () => emit(['o']),
   rescue: (x, y) => emit(['r', Math.round(x * 10) / 10, Math.round(y * 10) / 10]),
 };
 
@@ -251,12 +252,13 @@ function makeReplica(msg) {
   const players = msg.players.map((p, i) => {
     const edge = arena.goalEdges.get(i);
     const h = homePosition(edge);
-    return { ...p, index: i, edge, lives: msg.settings.lives, alive: true, mallet: { ...h }, net: { ...h } };
+    return { ...p, index: i, edge, lives: msg.settings.lives, goals: 0, conceded: 0, alive: true, mallet: { ...h }, net: { ...h } };
   });
+  const timed = msg.settings.mode === 'time';
   const pucks = Array.from({ length: msg.settings.pucks }, () => ({
     active: false, x: 0, y: 0, vx: 0, vy: 0, timer: PHYSICS.startDelay, lastTouch: -1, net: null, netTime: 0,
   }));
-  return { arena, layoutKey: '', players, pucks };
+  return { arena, layoutKey: '', players, pucks, timed, timeLeft: timed ? msg.settings.minutes * 60 : 0, overtime: false };
 }
 
 function applySnapshot(s) {
@@ -265,7 +267,9 @@ function applySnapshot(s) {
     p.net = { x: s.m[i][0], y: s.m[i][1] };
     p.lives = s.l[i];
     p.alive = p.lives > 0;
+    [p.goals, p.conceded] = s.k[i];
   });
+  if (view.timed) { view.timeLeft = s.c; view.overtime = s.o === 1; }
   // Feldform (ändert sich, wenn jemand ausscheidet)
   const key = JSON.stringify(s.g);
   if (key !== view.layoutKey) {
@@ -364,6 +368,10 @@ function handleEvent(ev) {
       sfx.out();
       banner(ev[1] === myIndex ? 'Du bist raus!' : `${name(ev[1])} ist raus!`, color(ev[1]), 2000);
       break;
+    case 'o':
+      sfx.out();
+      banner('Verlängerung!', '#fff', 2000);
+      break;
     case 'v':
       sfx.win();
       setTimeout(() => showEnd(ev[1]), 1500);
@@ -373,18 +381,36 @@ function handleEvent(ev) {
 
 function showEnd(winner) {
   mode = 'end';
-  const order = [winner, ...eliminated.slice().reverse()].filter(i => i >= 0);
+  const timed = view.timed;
+  const order = timed
+    ? standings(view.players).map(p => p.index)
+    : [winner, ...eliminated.slice().reverse()].filter(i => i >= 0);
+  // Statistik: wer wie oft getroffen hat
+  const columns = timed ? ['Tore', 'Gegen', 'Pkt.'] : ['Tore', 'Gegen'];
+  const row = (cells, cls = '') => {
+    const li = document.createElement('li');
+    li.className = cls;
+    li.innerHTML = '<span class="place"></span><span class="dot"></span><span class="name"></span>' + cells.map(() => '<span class="num"></span>').join('');
+    li.querySelectorAll('.num').forEach((el, k) => { el.textContent = cells[k]; });
+    return li;
+  };
   const list = $('#ranking');
   list.innerHTML = '';
+  list.append(row(columns, 'head'));
   order.forEach((i, place) => {
     const p = view.players[i];
-    const li = document.createElement('li');
+    const cells = [p.goals, p.conceded];
+    if (timed) cells.push(signed(points(p)));
+    const li = row(cells);
     li.style.setProperty('--c', PLAYER_COLORS[p.colorIndex].css);
-    li.innerHTML = '<span class="place"></span><span class="dot"></span><span class="name"></span>';
     li.querySelector('.place').textContent = `${place + 1}.`;
     li.querySelector('.name').textContent = p.name + (i === myIndex ? ' (du)' : '');
     list.append(li);
   });
+  const best = Math.max(...view.players.map(p => p.goals));
+  $('#topScorer').textContent = best > 0
+    ? `Meiste Tore: ${view.players.filter(p => p.goals === best).map(p => p.name).join(' & ')} (${best})`
+    : '';
   const w = view.players[winner];
   $('#winner').textContent = winner === myIndex ? 'Du gewinnst!' : `${w?.name ?? 'Niemand'} gewinnt!`;
   $('#winner').style.color = w ? PLAYER_COLORS[w.colorIndex].css : '#fff';
@@ -400,6 +426,8 @@ $('#quitBtn').addEventListener('click', () => {
   if (role === 'host') { if (confirm('Spiel für alle abbrechen?')) backToLobby(); }
   else if (confirm('Spiel verlassen?')) goHome();
 });
+
+const signed = n => (n > 0 ? `+${n}` : n < 0 ? `−${-n}` : '0');
 
 function backToLobby() {
   mode = 'lobby';
@@ -464,12 +492,21 @@ function renderLobby() {
 
   $('#hostControls').hidden = !isHost;
   $('#clientInfo').hidden = isHost;
-  $('#lives').value = String(lobby.settings.lives);
-  $('#pucks').value = String(lobby.settings.pucks);
+  const st = lobby.settings, timed = st.mode === 'time';
+  $('#mode').value = st.mode;
+  $('#lives').value = String(st.lives);
+  $('#minutes').value = String(st.minutes);
+  $('#pucks').value = String(st.pucks);
+  $('#livesField').hidden = timed;
+  $('#minutesField').hidden = !timed;
   $('#addBot').disabled = lobby.players.length >= MAX_PLAYERS;
   $('#startBtn').disabled = lobby.players.length < 2;
   $('#startBtn').textContent = lobby.players.length < 2 ? 'Mindestens 2 Spieler' : `Spiel starten (${lobby.players.length})`;
-  $('#clientInfo').textContent = `${lobby.settings.lives} Leben · ${lobby.settings.pucks} ${lobby.settings.pucks === 1 ? 'Puck' : 'Pucks'} – warte auf den Host …`;
+  const rule = timed ? `Zeitmodus · ${st.minutes} Min.` : `${st.lives} Leben`;
+  $('#clientInfo').textContent = `${rule} · ${st.pucks} ${st.pucks === 1 ? 'Puck' : 'Pucks'} – warte auf den Host …`;
+  $('#modeHint').textContent = timed
+    ? 'Niemand scheidet aus. Tor = +1, Gegentor = −1. Nach Ablauf der Zeit gewinnt der Beste.'
+    : 'Jedes Gegentor kostet ein Leben. Der Letzte gewinnt.';
 }
 
 // ---------- Finger / Maus ----------
@@ -664,8 +701,23 @@ function frame(now) {
     if (me?.edge && mode === 'play') drawPad(me, overrides.ownMallet ?? me.mallet);
     else if (!me?.alive) setPad(false);   // ausgeschieden: ganzer Bildschirm fürs Zuschauen
   }
+  updateClock();
   if (view) renderer.update(view, dt, overrides);
   requestAnimationFrame(frame);
+}
+
+// Restzeit oben in der Mitte (nur Zeitmodus); die letzten 5 Sekunden ticken
+let lastClockSecond = -1;
+function updateClock() {
+  const el = $('#clock');
+  const on = mode === 'play' && myIndex >= 0 && !!view?.timed;
+  el.hidden = !on;
+  if (!on) return;
+  const sec = Math.ceil(view.timeLeft);
+  el.textContent = view.overtime ? 'Verlängerung' : `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+  el.classList.toggle('urgent', view.overtime || sec <= 10);
+  if (sec !== lastClockSecond && sec <= 5 && sec > 0 && !view.overtime) sfx.tick();
+  lastClockSecond = sec;
 }
 
 goHome();
